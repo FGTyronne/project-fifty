@@ -2,9 +2,6 @@ name: alpaca-market-data-smoke
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - m4/market-data-session-backtest
 
 permissions:
   contents: read
