@@ -2,6 +2,11 @@ name: alpaca-paper-connectivity
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - ops/alpaca-connectivity-run
+    paths:
+      - .github/alpaca-paper-connectivity.trigger
 
 permissions:
   contents: read
