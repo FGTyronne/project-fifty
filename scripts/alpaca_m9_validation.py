@@ -173,7 +173,11 @@ def _scheduled_risk_states(
 def _transition_count(states: list[tuple[datetime, bool]]) -> int:
     return sum(
         current_state != previous_state
-        for (_, previous_state), (_, current_state) in zip(states, states[1:])
+        for (_, previous_state), (_, current_state) in zip(
+            states,
+            states[1:],
+            strict=False,
+        )
     )
 
 
