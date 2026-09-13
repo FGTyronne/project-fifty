@@ -114,6 +114,22 @@ class AlpacaPaperBroker:
     def get_open_orders(self) -> list[BrokerOrder]:
         return [self._to_broker_order(order) for order in self._get_open_orders_raw()]
 
+    def get_order(
+        self,
+        broker_order_id: str,
+        *,
+        idempotency_key: str,
+        reference_price: Decimal = Decimal("0"),
+    ) -> ExecutionReport:
+        order = self._get_order_raw(broker_order_id)
+        if order is None:
+            raise RuntimeError("broker order disappeared during lookup")
+        return self._to_execution_report(
+            order,
+            idempotency_key=idempotency_key,
+            reference_price=reference_price,
+        )
+
     def get_order_by_client_order_id(
         self,
         idempotency_key: str,
@@ -209,17 +225,19 @@ class AlpacaPaperBroker:
         self,
         control: ControlState,
         *,
-        expected_position_symbols: set[str],
+        expected_positions: Mapping[str, Decimal],
         expected_open_client_order_ids: set[str],
     ) -> bool:
-        broker_position_symbols = {
-            self._required_str(position, "symbol") for position in self._get_positions_raw()
+        broker_positions = {
+            self._required_str(position, "symbol"): self._decimal(position.get("qty"))
+            for position in self._get_positions_raw()
+            if self._decimal(position.get("qty")) != 0
         }
         broker_open_client_ids = {
             self._required_str(order, "client_order_id") for order in self._get_open_orders_raw()
         }
         consistent = (
-            broker_position_symbols == expected_position_symbols
+            broker_positions == dict(expected_positions)
             and broker_open_client_ids == expected_open_client_order_ids
         )
         if consistent:
