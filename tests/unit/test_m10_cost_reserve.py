@@ -23,8 +23,6 @@ def test_full_allocation_initial_buy_reserves_estimated_slippage() -> None:
         reference_prices={"SPY": price},
         reference_price_timestamps={"SPY": as_of},
         market_state_hash="m10-full-allocation",
-        history={},
-        benchmark_symbol="SPY",
     )
     target = TargetPortfolio(
         as_of=as_of,
