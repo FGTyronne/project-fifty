@@ -313,7 +313,10 @@ def _roc(values: Sequence[Decimal], lookback: int) -> Decimal:
 def _rsi(values: Sequence[Decimal], period: int) -> Decimal:
     if len(values) <= period:
         raise ValueError("insufficient values for RSI")
-    changes = [values[index] - values[index - 1] for index in range(len(values) - period, len(values))]
+    changes = [
+        values[index] - values[index - 1]
+        for index in range(len(values) - period, len(values))
+    ]
     gains = sum((max(change, _ZERO) for change in changes), start=_ZERO) / Decimal(period)
     losses = sum((max(-change, _ZERO) for change in changes), start=_ZERO) / Decimal(period)
     if losses == _ZERO:
