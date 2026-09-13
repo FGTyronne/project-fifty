@@ -40,7 +40,12 @@ class LedgerBackedControlState(ControlState):
         self._ledger = ledger
 
     @classmethod
-    def restore(cls, *, ledger: Ledger, kill_switch_active: bool = False) -> "LedgerBackedControlState":
+    def restore(
+        cls,
+        *,
+        ledger: Ledger,
+        kill_switch_active: bool = False,
+    ) -> "LedgerBackedControlState":
         return cls(
             ledger=ledger,
             mode=_restored_mode(ledger),
