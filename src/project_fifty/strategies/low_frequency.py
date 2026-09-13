@@ -201,7 +201,7 @@ class LowFrequencyMomentumStrategy:
     ) -> TargetPortfolio:
         preserved_evidence = dict(evidence or {})
         preserved_evidence.setdefault("scheduled", "false")
-        preserved_evidence["selection"] = reason
+        preserved_evidence.setdefault("selection", reason)
 
         if context.portfolio.nav <= _ZERO or not context.portfolio.positions:
             return self._cash(context, evidence=preserved_evidence)
