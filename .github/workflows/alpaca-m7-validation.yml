@@ -2,9 +2,6 @@ name: alpaca-m7-economic-validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - m7/regime-exposure-persistence
 
 permissions:
   contents: read
