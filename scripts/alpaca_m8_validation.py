@@ -15,7 +15,8 @@ from project_fifty.backtest.engine import (
 )
 from project_fifty.brokers.alpaca.broker import AlpacaPaperBroker
 from project_fifty.brokers.alpaca.config import AlpacaPaperConfig
-from project_fifty.market_data.alpaca import AlpacaMarketDataClient, AlpacaMarketDataConfig
+from project_fifty.market_data.alpaca import AlpacaMarketDataConfig
+from project_fifty.market_data.research import AlpacaResearchMarketDataClient
 from project_fifty.market_data.universe import AlpacaUniverseBuilder, CandidateUniverse
 from project_fifty.strategies.contracts import MarketBar
 from project_fifty.strategies.low_frequency import LowFrequencyMomentumStrategy
@@ -188,7 +189,7 @@ def main() -> None:
     with AlpacaPaperBroker(paper_config) as broker:
         universe = AlpacaUniverseBuilder(broker).build()
 
-    with AlpacaMarketDataClient(data_config) as market_data:
+    with AlpacaResearchMarketDataClient(data_config) as market_data:
         history = market_data.get_bars(
             universe.all_symbols,
             start=FIXED_DATA_START,
@@ -247,6 +248,7 @@ def main() -> None:
     payload: dict[str, object] = {
         "generated_at_utc": datetime.now(UTC).isoformat(),
         "data_feed": "iex",
+        "market_data_adjustment": AlpacaResearchMarketDataClient.adjustment,
         "history_start": FIXED_DATA_START.isoformat(),
         "history_end": FIXED_DATA_END.isoformat(),
         "development_fraction": str(DEVELOPMENT_FRACTION),
@@ -257,6 +259,10 @@ def main() -> None:
         "historical_universe_limitation": (
             "The fixed candidate universe is validated using current Alpaca asset metadata and "
             "therefore carries survivorship/selection limitations in historical replay."
+        ),
+        "corporate_action_limitation": (
+            "Bars are split-adjusted because replay does not process split quantity events. "
+            "Other corporate-action cash flows and reorganisations are not modelled explicitly."
         ),
         "economic_policy": {
             "minimum_trade_notional": str(policy.config.minimum_trade_notional),
@@ -296,6 +302,7 @@ def main() -> None:
     output.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
     print("Project Fifty M8 economic validation completed")
+    print(f"market_data_adjustment={AlpacaResearchMarketDataClient.adjustment}")
     print(f"holdout_return={holdout_result.total_return}")
     print(f"holdout_max_drawdown={holdout_result.max_drawdown}")
     print(f"holdout_costs={holdout_result.total_costs}")
