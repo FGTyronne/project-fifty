@@ -1,0 +1,1 @@
+one-time connectivity trigger
