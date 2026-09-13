@@ -115,9 +115,7 @@ class AutonomousSessionRunner:
             )
 
         provisional = self._authorized_portfolio_with_fill_marks()
-        symbols = tuple(
-            sorted(set(self._universe.all_symbols) | set(provisional.positions))
-        )
+        symbols = tuple(sorted(set(self._universe.all_symbols) | set(provisional.positions)))
         end = current - timedelta(seconds=self._config.timeframe_seconds)
         start = self._config.history_start or (end - timedelta(days=self._config.history_days))
         if start >= end:
@@ -173,6 +171,19 @@ class AutonomousSessionRunner:
             benchmark_symbol=self._universe.benchmark_symbol,
         )
         target = self._strategy.generate_target(context)
+        self._ledger.append(
+            "strategy_target_generated",
+            {
+                "as_of": target.as_of.isoformat(),
+                "strategy_id": target.strategy_id,
+                "strategy_version": target.strategy_version,
+                "market_state_hash": target.market_state_hash,
+                "weights": {symbol: str(weight) for symbol, weight in target.weights.items()},
+                "cash_weight": str(target.cash_weight),
+                "confidence": str(target.confidence),
+                "evidence": dict(target.evidence),
+            },
+        )
         proposals, plan = self._proposal_builder.build_with_plan(target=target, context=context)
 
         approved = 0

@@ -1,0 +1,92 @@
+name: alpaca-m10-paper
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '5 15 * * 1-5'
+
+concurrency:
+  group: m10-paper-runtime
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  autonomous-paper-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+      ALPACA_PAPER_API_SECRET: ${{ secrets.ALPACA_PAPER_API_SECRET }}
+      ALPACA_PAPER_BASE_URL: https://paper-api.alpaca.markets
+      ALPACA_DATA_BASE_URL: https://data.alpaca.markets
+      ALPACA_DATA_FEED: iex
+      ALPACA_PAPER_REQUEST_LOG: state/alpaca-request-ids.jsonl
+      PROJECT_FIFTY_STATE_DIR: state
+      PROJECT_FIFTY_ENV: m10-paper
+      PROJECT_FIFTY_STARTING_CASH_GBP: '50.00'
+      PROJECT_FIFTY_ACCOUNT_CURRENCY: USD
+      PROJECT_FIFTY_AUTHORIZED_STARTING_CASH: '67.6725'
+      PROJECT_FIFTY_MAX_ORDER_NOTIONAL: '250'
+      PROJECT_FIFTY_PERMITTED_SYMBOLS: SPY
+      PROJECT_FIFTY_MAX_STALE_SECONDS: '120'
+      PROJECT_FIFTY_KILL_SWITCH: ${{ vars.PROJECT_FIFTY_KILL_SWITCH || 'false' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Restore previous durable M10 state
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p state
+          previous_run="$(
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/alpaca-m10-paper.yml/runs?per_page=50" \
+              --jq '.workflow_runs[] | select(.head_branch == "main" and .status == "completed") | .id' \
+              | head -n 1
+          )"
+          if [[ -z "${previous_run}" ]]; then
+            echo "No previous completed main-branch M10 runtime exists; starting genesis ledger."
+            exit 0
+          fi
+
+          artifact_id="$(
+            gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${previous_run}/artifacts?per_page=100" \
+              --jq '.artifacts[] | select(.name == "m10-runtime-state" and .expired == false) | .id' \
+              | head -n 1
+          )"
+          if [[ -z "${artifact_id}" ]]; then
+            echo "Previous M10 run exists but its durable state artifact is unavailable. Failing closed."
+            exit 1
+          fi
+
+          gh api "/repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > /tmp/m10-state.zip
+          unzip -o /tmp/m10-state.zip -d state
+          test -f state/m10-ledger.jsonl
+          echo "Restored M10 ledger from workflow run ${previous_run}."
+
+      - name: Install Project Fifty
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+
+      - name: Run deterministic autonomous paper cycle
+        run: python scripts/alpaca_m10_paper_runtime.py
+
+      - name: Upload durable M10 state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: m10-runtime-state
+          path: |
+            state/m10-ledger.jsonl
+            state/m10-runtime-summary.json
+            state/alpaca-request-ids.jsonl
+          if-no-files-found: warn
+          retention-days: 90

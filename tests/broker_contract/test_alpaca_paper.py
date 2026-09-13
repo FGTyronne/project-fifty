@@ -12,6 +12,7 @@ from pydantic import SecretStr, ValidationError
 from project_fifty.brokers.alpaca.broker import AlpacaPaperBroker
 from project_fifty.brokers.alpaca.config import PAPER_BASE_URL, AlpacaPaperConfig
 from project_fifty.config.settings import Settings
+from project_fifty.control.persistence import LedgerBackedControlState
 from project_fifty.control.state import ControlState
 from project_fifty.domain.models import (
     ExperimentMode,
@@ -351,7 +352,7 @@ def test_large_broker_buying_power_does_not_expand_internal_authority(
     client.close()
 
 
-def test_unexpected_broker_state_forces_safe_mode() -> None:
+def test_unexpected_broker_state_forces_and_persists_safe_mode(tmp_path: Path) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v2/positions":
             return httpx.Response(
@@ -364,7 +365,9 @@ def test_unexpected_broker_state_forces_safe_mode() -> None:
 
     client = _client(handler)
     broker = AlpacaPaperBroker(_config(), client=client)
-    control = ControlState()
+    ledger_path = tmp_path / "ledger.jsonl"
+    ledger = LocalAppendOnlyLedger(ledger_path)
+    control = LedgerBackedControlState.restore(ledger=ledger)
     consistent = broker.guard_broker_state(
         control,
         expected_positions={},
@@ -372,4 +375,9 @@ def test_unexpected_broker_state_forces_safe_mode() -> None:
     )
     assert consistent is False
     assert control.mode == ExperimentMode.SAFE
+
+    restored = LedgerBackedControlState.restore(
+        ledger=LocalAppendOnlyLedger(ledger_path)
+    )
+    assert restored.mode == ExperimentMode.SAFE
     client.close()
