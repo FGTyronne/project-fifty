@@ -297,7 +297,10 @@ class ExecutionKernel:
         original_key = self._broker_order_key.get(cancelled.broker_order_id)
         if cancelled.status == OrderStatus.CANCELLED and original_key is not None:
             intent_id = self._intent_id_by_key.get(original_key)
-            if intent_id is not None and not self._transition_order(intent_id, OrderStatus.CANCELLED):
+            if (
+                intent_id is not None
+                and not self._transition_order(intent_id, OrderStatus.CANCELLED)
+            ):
                 self._enter_safe_mode()
                 raise RuntimeError("invalid cancellation state transition")
         elif cancelled.status != OrderStatus.CANCELLED:
