@@ -82,6 +82,15 @@ def test_non_scheduled_bar_preserves_current_weight() -> None:
     assert target.evidence["selection"] == "NOT_SCHEDULED"
 
 
+def test_non_scheduled_bar_produces_no_executable_rebalance() -> None:
+    context = _context(benchmark_count=101, incumbent="AAPL", incumbent_value=Decimal("37"))
+    target = LowFrequencyMomentumStrategy().generate_target(context)
+
+    plan = m8_rebalance_policy().plan(target=target, context=context)
+
+    assert plan.executable_symbols == frozenset()
+
+
 def test_scheduled_decision_enters_best_eligible_candidate_at_seventy_percent() -> None:
     target = LowFrequencyMomentumStrategy().generate_target(_context())
 
