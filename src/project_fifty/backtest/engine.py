@@ -144,13 +144,11 @@ class BacktestEngine:
             )
             target = self._strategy.generate_target(context)
 
-            execution_bars = {
-                symbol: self._bar_at(bars, execution_time)
-                for symbol, bars in history.items()
-            }
-            execution_bars = {
-                symbol: bar for symbol, bar in execution_bars.items() if bar is not None
-            }
+            execution_bars: dict[str, MarketBar] = {}
+            for symbol, bars in history.items():
+                bar = self._bar_at(bars, execution_time)
+                if bar is not None:
+                    execution_bars[symbol] = bar
             if benchmark_symbol not in execution_bars:
                 continue
 
