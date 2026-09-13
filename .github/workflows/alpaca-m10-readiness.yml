@@ -2,6 +2,9 @@ name: alpaca-m10-readiness
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - m10/controlled-paper
 
 permissions:
   contents: read
