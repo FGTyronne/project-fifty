@@ -2,60 +2,58 @@
 
 **Project Fifty** is a public engineering and research experiment testing whether a fully autonomous trading system can compound a single lifetime allocation of **£50** without recapitalisation.
 
-The system is intended to research markets, generate trading decisions, open and close positions, resize exposure, rotate assets, hold cash, and manage its portfolio without trade-by-trade human approval. Human involvement is limited to ownership, infrastructure administration, constitutional changes before live launch, and an emergency kill switch.
-
-## Core experiment
-
-- Starting owner contribution: **£50**
-- Additional experimental capital after live inception: **prohibited**
-- Human approval for ordinary trades: **none**
-- Autonomous entries and exits: **permitted**
-- Autonomous position resizing and strategy switching: **permitted within constitutional limits**
-- Leverage, margin, short selling, CFDs, futures and options: **prohibited in the first live constitution**
-- Access to any owner assets outside the designated Project Fifty account: **prohibited**
-- Cash is a valid position
-- Doing nothing is a valid autonomous decision
-- Failure is not hidden or redefined after the fact
-
 ## Current status
 
-**DEVELOPMENT — Stage 0 / Milestone 1 specification**
+**DEVELOPMENT — Stage 1 / Milestone 1 kernel implemented (simulated only)**
 
 No live brokerage account is connected. No live trading is enabled.
 
-## Engineering principle
+## Milestone 1 autonomous kernel
 
-The trading agent may adapt its strategy, but it may not expand its own authority. AI-generated trade decisions must pass through deterministic validation before reaching an execution adapter. The complete system remains autonomous because valid orders are executed automatically without owner approval.
+This repository now includes a broker-independent autonomous trading kernel with:
 
-The initial architecture is deliberately broker-agnostic and model-agnostic. Brokerage providers and AI models are adapters behind stable internal interfaces.
+- typed domain models (`TradeProposal`, `PortfolioState`, `Position`, `OrderIntent`, `BrokerOrder`, `ExecutionReport`, `RiskDecision`, `LedgerEvent`, `ExperimentMode`);
+- deterministic constitutional risk validation;
+- replaceable broker adapter protocol and deterministic simulated broker;
+- explicit execution flow with idempotency protection;
+- append-only local ledger implementation;
+- deterministic portfolio replay/reconciliation utilities;
+- control modes (`NORMAL`, `DEFENSIVE`, `SAFE`, `DEAD`) and kill-switch enforcement;
+- structured JSON logging helpers.
 
-## Roadmap
+## Quickstart
 
-0. Project specification and constitution
-1. Repository and engineering foundation
-2. UK broker investigation and quantitative evaluation
-3. Market-data layer
-4. Paper execution engine
-5. Deterministic risk firewall
-6. Non-AI baseline strategy
-7. AI research and decision engine
-8. Backtesting and walk-forward evaluation
-9. Extended autonomous paper trading
-10. £50 live inception
-11. Autonomous operation
-12. Long-run evaluation against passive and non-AI benchmarks
+```bash
+python -m pip install -e .[dev]
+ruff check .
+mypy
+pytest -q
+```
 
-## Public repository policy
+## Deterministic demonstration
 
-This repository is intended to contain source code, tests, architecture, methodology, constitutional documents and sanitised experiment reporting.
+The required M1 autonomous demonstration is covered by:
 
-It must never contain broker credentials, model API keys, database credentials, private keys, live account identifiers, secret webhook URLs, recovery credentials or other sensitive operational material.
+- `tests/integration/test_kernel.py::test_demo_flow_hold_buy_reduce_exit`
 
-Live deployment secrets and sensitive operational controls must remain outside this public repository.
+Scenario:
 
-## Important
+- start cash `£50.00`;
+- `HOLD` (no order);
+- autonomous `BUY £7.50 TEST`;
+- autonomous `REDUCE 40%`;
+- autonomous `EXIT` remainder;
+- reconciled final NAV and immutable ordered ledger history.
 
-This is an experimental own-account software project, not an investment fund, financial promotion, investment recommendation or investment advisory service. Project Fifty is designed for the owner's designated experimental account only.
+## Design limitations (intentional for M1)
+
+- Simulated broker fills synchronously for deterministic tests.
+- Instrument universe is a minimal configured placeholder (`TEST`) for constitutional guardrail verification.
+- `CANCEL` action is modelled but not exercised with partial/live order-book simulation in M1.
+
+## Security
+
+Never commit real credentials. `.env.example` intentionally contains no secrets.
 
 ## Licence
 
