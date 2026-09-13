@@ -85,15 +85,26 @@ def _spy_buy_and_hold(
     )
     if index is None or index + 1 >= len(benchmark):
         raise RuntimeError("insufficient SPY bars for M9 holdout benchmark")
-    execution_bar = benchmark[index + 1]
+    execution_index = index + 1
+    execution_bar = benchmark[execution_index]
     fill_price = execution_bar.open * (Decimal("1") + SLIPPAGE_RATE)
     quantity = STARTING_CASH / fill_price
     entry_cost = quantity * (fill_price - execution_bar.open)
+
+    peak_nav = STARTING_CASH
+    max_drawdown = Decimal("0")
+    for bar in benchmark[execution_index:]:
+        nav = quantity * bar.close
+        peak_nav = max(peak_nav, nav)
+        if peak_nav > 0:
+            max_drawdown = min(max_drawdown, nav / peak_nav - Decimal("1"))
+
     ending_nav = quantity * benchmark[-1].close
     return {
         "starting_nav": str(STARTING_CASH),
         "ending_nav": str(ending_nav),
         "total_return": str(ending_nav / STARTING_CASH - Decimal("1")),
+        "max_drawdown": str(max_drawdown),
         "entry_cost": str(entry_cost),
         "execution_time": execution_bar.timestamp.isoformat(),
     }
@@ -148,16 +159,12 @@ def _walk_forward(
 
 def _scheduled_risk_states(
     benchmark: tuple[MarketBar, ...],
-    *,
-    holdout_start: datetime,
 ) -> list[tuple[datetime, bool]]:
     config = SingleMarketTrendConfig()
     minimum_history = max(config.trend_sma_days, config.momentum_days + 1)
     states: list[tuple[datetime, bool]] = []
     for index, bar in enumerate(benchmark, start=1):
         if index < minimum_history or index % config.rebalance_every_bars != 0:
-            continue
-        if bar.timestamp < holdout_start:
             continue
         window = benchmark[:index]
         sma = sum(
@@ -170,10 +177,14 @@ def _scheduled_risk_states(
     return states
 
 
-def _transition_count(states: list[tuple[datetime, bool]]) -> int:
+def _holdout_transition_count(
+    states: list[tuple[datetime, bool]],
+    *,
+    holdout_start: datetime,
+) -> int:
     return sum(
-        current_state != previous_state
-        for (_, previous_state), (_, current_state) in zip(
+        current_time >= holdout_start and current_state != previous_state
+        for (_, previous_state), (current_time, current_state) in zip(
             states,
             states[1:],
             strict=False,
@@ -245,8 +256,14 @@ def main() -> None:
     development_result = _run(development_history)
     holdout_result = _run(history, evaluation_start=holdout_start)
     walk_returns = _walk_forward(history=history, holdout_start=holdout_start)
-    risk_states = _scheduled_risk_states(benchmark, holdout_start=holdout_start)
-    risk_state_transitions = _transition_count(risk_states)
+    all_risk_states = _scheduled_risk_states(benchmark)
+    holdout_risk_states = [
+        state for state in all_risk_states if state[0] >= holdout_start
+    ]
+    risk_state_transitions = _holdout_transition_count(
+        all_risk_states,
+        holdout_start=holdout_start,
+    )
     gate = _gate(
         result=holdout_result,
         walk_returns=walk_returns,
@@ -292,7 +309,7 @@ def main() -> None:
         "spy_buy_and_hold": benchmark_payload,
         "holdout_scheduled_risk_states": [
             {"timestamp": timestamp.isoformat(), "risk_on": risk_on}
-            for timestamp, risk_on in risk_states
+            for timestamp, risk_on in holdout_risk_states
         ],
         "holdout_risk_state_transitions": risk_state_transitions,
         "walk_forward": {
