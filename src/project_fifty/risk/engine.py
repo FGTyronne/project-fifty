@@ -73,7 +73,10 @@ class RiskEngine:
 
         if proposal.notional is not None and proposal.quantity is not None:
             if proposal.quantity * proposal.reference_price != proposal.notional:
-                return RiskDecision(approved=False, reason=RejectionReason.NOTIONAL_QUANTITY_MISMATCH)
+                return RiskDecision(
+                    approved=False,
+                    reason=RejectionReason.NOTIONAL_QUANTITY_MISMATCH,
+                )
 
         if proposal.reference_price != intent.reference_price:
             return RiskDecision(approved=False, reason=RejectionReason.NOTIONAL_QUANTITY_MISMATCH)
