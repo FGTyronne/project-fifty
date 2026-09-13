@@ -2,9 +2,6 @@ name: alpaca-m8-economic-validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - m8/low-frequency-daily
 
 permissions:
   contents: read
