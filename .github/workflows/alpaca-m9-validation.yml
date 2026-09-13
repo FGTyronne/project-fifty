@@ -1,0 +1,35 @@
+name: alpaca-m9-economic-validation
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  economic-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+      ALPACA_PAPER_API_SECRET: ${{ secrets.ALPACA_PAPER_API_SECRET }}
+      ALPACA_DATA_BASE_URL: https://data.alpaca.markets
+      ALPACA_DATA_FEED: iex
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Project Fifty
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: M9 disjoint frozen validation
+        run: python scripts/alpaca_m9_validation.py
+      - name: Upload M9 validation record
+        uses: actions/upload-artifact@v4
+        with:
+          name: m9-economic-validation
+          path: state/m9-economic-validation.json
+          if-no-files-found: error
+          retention-days: 30
