@@ -212,6 +212,27 @@ def test_existing_client_order_id_prevents_duplicate_submission() -> None:
     client.close()
 
 
+def test_order_can_be_recovered_by_broker_order_id() -> None:
+    client_order_id = AlpacaPaperBroker.client_order_id("logical-order")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v2/orders/order-1":
+            return httpx.Response(200, json=_order(client_order_id=client_order_id))
+        raise AssertionError(f"unexpected request: {request.method} {request.url}")
+
+    client = _client(handler)
+    broker = AlpacaPaperBroker(_config(), client=client)
+    report = broker.get_order(
+        "order-1",
+        idempotency_key="logical-order",
+        reference_price=Decimal("20"),
+    )
+    assert report.broker_order_id == "order-1"
+    assert report.idempotency_key == "logical-order"
+    assert report.status == OrderStatus.FILLED
+    client.close()
+
+
 def test_ambiguous_timeout_queries_broker_before_any_resubmission() -> None:
     lookup_calls = 0
     post_calls = 0
@@ -346,7 +367,7 @@ def test_unexpected_broker_state_forces_safe_mode() -> None:
     control = ControlState()
     consistent = broker.guard_broker_state(
         control,
-        expected_position_symbols=set(),
+        expected_positions={},
         expected_open_client_order_ids=set(),
     )
     assert consistent is False
