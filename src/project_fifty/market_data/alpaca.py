@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
@@ -225,6 +225,62 @@ class AlpacaMarketDataClient:
         return {
             symbol: tuple(sorted(items.values(), key=lambda bar: bar.timestamp))
             for symbol, items in bars_by_symbol.items()
+        }
+
+    def get_bars_windowed(
+        self,
+        symbols: tuple[str, ...],
+        *,
+        start: datetime,
+        end: datetime,
+        timeframe: str,
+        chunk_days: int = 30,
+        symbol_batch_size: int = 4,
+        limit: int = 10000,
+    ) -> dict[str, tuple[MarketBar, ...]]:
+        """Fetch long history as bounded time windows and symbol batches.
+
+        The normal per-request pagination ceiling remains unchanged. Long research histories are
+        decomposed into auditable requests, then deduplicated by timestamp at window boundaries.
+        This prevents a single historical request from silently becoming unbounded.
+        """
+        clean_symbols = self._symbols(symbols)
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("market-data bounds must be timezone-aware")
+        if end <= start:
+            raise ValueError("market-data end must be after start")
+        if chunk_days <= 0:
+            raise ValueError("chunk_days must be positive")
+        if symbol_batch_size <= 0:
+            raise ValueError("symbol_batch_size must be positive")
+
+        combined: dict[str, dict[datetime, MarketBar]] = {
+            symbol: {} for symbol in clean_symbols
+        }
+        cursor = start
+        chunk = timedelta(days=chunk_days)
+
+        while cursor < end:
+            window_end = min(cursor + chunk, end)
+            for offset in range(0, len(clean_symbols), symbol_batch_size):
+                batch = clean_symbols[offset : offset + symbol_batch_size]
+                bars = self.get_bars(
+                    batch,
+                    start=cursor,
+                    end=window_end,
+                    timeframe=timeframe,
+                    limit=limit,
+                )
+                for symbol, observations in bars.items():
+                    for bar in observations:
+                        if bar.timestamp < start.astimezone(UTC) or bar.timestamp > end.astimezone(UTC):
+                            raise ValueError("windowed market data escaped requested bounds")
+                        combined[symbol][bar.timestamp] = bar
+            cursor = window_end
+
+        return {
+            symbol: tuple(sorted(items.values(), key=lambda bar: bar.timestamp))
+            for symbol, items in combined.items()
         }
 
     def get_latest_quotes(self, symbols: tuple[str, ...]) -> dict[str, MarketQuote]:
