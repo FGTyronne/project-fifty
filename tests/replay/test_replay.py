@@ -52,3 +52,42 @@ def test_fees_and_slippage_reduce_nav_correctly() -> None:
         currency="USD",
     )
     assert replayed.nav == Decimal("49.30")
+
+
+def test_partial_then_full_fill_applies_only_cumulative_delta() -> None:
+    partial = ExecutionReport(
+        report_id="partial",
+        broker_order_id="order-1",
+        idempotency_key="logical-1",
+        symbol="TEST",
+        side=OrderSide.BUY,
+        status=OrderStatus.PARTIALLY_FILLED,
+        fill_quantity=Decimal("1"),
+        fill_price=Decimal("10"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        currency="USD",
+    )
+    filled = ExecutionReport(
+        report_id="filled",
+        broker_order_id="order-1",
+        idempotency_key="logical-1",
+        symbol="TEST",
+        side=OrderSide.BUY,
+        status=OrderStatus.FILLED,
+        fill_quantity=Decimal("2"),
+        fill_price=Decimal("11"),
+        fee=Decimal("0"),
+        slippage=Decimal("0"),
+        currency="USD",
+    )
+    replayed = PortfolioReconciler.replay_events(
+        starting_cash=Decimal("50"),
+        events=[partial, filled],
+        mark_prices={"TEST": Decimal("11")},
+        currency="USD",
+    )
+    assert replayed.cash == Decimal("28")
+    assert replayed.positions["TEST"].quantity == Decimal("2")
+    assert replayed.positions["TEST"].average_price == Decimal("11")
+    assert replayed.nav == Decimal("50")
