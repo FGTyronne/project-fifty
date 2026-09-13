@@ -17,8 +17,10 @@ def settings() -> Settings:
         PROJECT_FIFTY_LOG_LEVEL="INFO",
         PROJECT_FIFTY_STARTING_CASH_GBP=Decimal("50.00"),
         PROJECT_FIFTY_KILL_SWITCH=False,
+        account_currency="USD",
+        authorized_starting_cash=Decimal("50.00"),
         max_stale_seconds=30,
-        max_order_notional_gbp=Decimal("50"),
+        max_order_notional=Decimal("50"),
         permitted_symbols=frozenset({"TEST"}),
     )
 
@@ -38,6 +40,8 @@ def make_proposal(
     notional: Decimal | None = None,
     reduce_fraction: Decimal | None = None,
     ts: datetime | None = None,
+    currency: str = "USD",
+    cancel_order_id: str | None = None,
 ) -> TradeProposal:
     return TradeProposal(
         proposal_id=proposal_id,
@@ -45,10 +49,12 @@ def make_proposal(
         symbol="TEST",
         action=action,
         quantity=qty,
-        notional_gbp=notional,
+        notional=notional,
         reduce_fraction=reduce_fraction,
-        reference_price_gbp=price,
+        reference_price=price,
         reference_price_timestamp=ts or datetime.now(UTC),
-        estimated_fee_gbp=Decimal("0.01"),
-        estimated_slippage_gbp=Decimal("0.01"),
+        estimated_fee=Decimal("0.01"),
+        estimated_slippage=Decimal("0.01"),
+        quote_currency=currency,
+        cancel_order_id=cancel_order_id,
     )

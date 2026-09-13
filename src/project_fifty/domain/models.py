@@ -6,7 +6,7 @@ from enum import Enum
 from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class TradeAction(str, Enum):
@@ -59,6 +59,10 @@ class RejectionReason(str, Enum):
     MODE_RESTRICTION = "MODE_RESTRICTION"
     KILL_SWITCH_ACTIVE = "KILL_SWITCH_ACTIVE"
     ESTIMATED_COST_INVALID = "ESTIMATED_COST_INVALID"
+    NOTIONAL_QUANTITY_MISMATCH = "NOTIONAL_QUANTITY_MISMATCH"
+    CURRENCY_MISMATCH = "CURRENCY_MISMATCH"
+    CANCEL_TARGET_REQUIRED = "CANCEL_TARGET_REQUIRED"
+    INVALID_ORDER_STATE_TRANSITION = "INVALID_ORDER_STATE_TRANSITION"
 
 
 class StrictModel(BaseModel):
@@ -81,12 +85,13 @@ class Position(StrictModel):
 
 
 class PortfolioState(StrictModel):
-    cash_gbp: Decimal
+    cash: Decimal
     positions: dict[str, Position] = Field(default_factory=dict)
-    nav_gbp: Decimal
+    nav: Decimal
+    currency: str
     as_of: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
-    @field_validator("cash_gbp", "nav_gbp")
+    @field_validator("cash", "nav")
     @classmethod
     def _finite_non_negative(cls, value: Decimal) -> Decimal:
         if not value.is_finite():
@@ -102,20 +107,22 @@ class TradeProposal(StrictModel):
     symbol: str
     action: TradeAction
     quantity: Decimal | None = None
-    notional_gbp: Decimal | None = None
+    notional: Decimal | None = None
     reduce_fraction: Decimal | None = None
-    reference_price_gbp: Decimal
+    reference_price: Decimal
     reference_price_timestamp: datetime
-    estimated_fee_gbp: Decimal
-    estimated_slippage_gbp: Decimal
+    estimated_fee: Decimal
+    estimated_slippage: Decimal
+    quote_currency: str
+    cancel_order_id: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @field_validator(
-        "reference_price_gbp",
-        "estimated_fee_gbp",
-        "estimated_slippage_gbp",
+        "reference_price",
+        "estimated_fee",
+        "estimated_slippage",
         "quantity",
-        "notional_gbp",
+        "notional",
         "reduce_fraction",
     )
     @classmethod
@@ -128,12 +135,18 @@ class TradeProposal(StrictModel):
             raise ValueError("must be non-negative")
         return value
 
-    @field_validator("reference_price_gbp")
+    @field_validator("reference_price")
     @classmethod
     def _reference_price_positive(cls, value: Decimal) -> Decimal:
         if value <= 0:
             raise ValueError("must be positive")
         return value
+
+    @model_validator(mode="after")
+    def _validate_reduce_fraction(self) -> "TradeProposal":
+        if self.reduce_fraction is not None and self.reduce_fraction > Decimal("1"):
+            raise ValueError("reduce_fraction must be <= 1")
+        return self
 
 
 class OrderIntent(StrictModel):
@@ -143,7 +156,9 @@ class OrderIntent(StrictModel):
     symbol: str
     side: OrderSide
     quantity: Decimal
-    reference_price_gbp: Decimal
+    reference_price: Decimal
+    notional: Decimal
+    currency: str
 
     @classmethod
     def create(
@@ -154,7 +169,8 @@ class OrderIntent(StrictModel):
         symbol: str,
         side: OrderSide,
         quantity: Decimal,
-        reference_price_gbp: Decimal,
+        reference_price: Decimal,
+        currency: str,
     ) -> "OrderIntent":
         return cls(
             intent_id=str(uuid4()),
@@ -163,10 +179,12 @@ class OrderIntent(StrictModel):
             symbol=symbol,
             side=side,
             quantity=quantity,
-            reference_price_gbp=reference_price_gbp,
+            reference_price=reference_price,
+            notional=quantity * reference_price,
+            currency=currency,
         )
 
-    @field_validator("quantity", "reference_price_gbp")
+    @field_validator("quantity", "reference_price", "notional")
     @classmethod
     def _finite_positive(cls, value: Decimal) -> Decimal:
         if not value.is_finite():
@@ -193,9 +211,10 @@ class ExecutionReport(StrictModel):
     side: OrderSide
     status: OrderStatus
     fill_quantity: Decimal
-    fill_price_gbp: Decimal
-    fee_gbp: Decimal
-    slippage_gbp: Decimal
+    fill_price: Decimal
+    fee: Decimal
+    slippage: Decimal
+    currency: str
     message: str = ""
 
 
@@ -210,6 +229,8 @@ class LedgerEvent(StrictModel):
     sequence: int
     event_type: str
     payload: dict[str, Any]
+    prev_hash: str
+    event_hash: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 

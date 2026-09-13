@@ -7,6 +7,8 @@ from project_fifty.config.settings import Settings
 from project_fifty.control.state import ControlState
 from project_fifty.domain.models import (
     ExperimentMode,
+    OrderIntent,
+    OrderSide,
     RejectionReason,
     RiskDecision,
     TradeAction,
@@ -17,15 +19,16 @@ from project_fifty.domain.models import (
 class RiskEngine:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
-        self._seen_idempotency_keys: set[str] = set()
 
     def evaluate(
         self,
         proposal: TradeProposal,
         *,
-        portfolio_cash_gbp: Decimal,
+        intent: OrderIntent | None,
+        authorized_cash: Decimal,
         position_qty: Decimal,
         control: ControlState,
+        known_idempotency_keys: set[str],
         now: datetime | None = None,
     ) -> RiskDecision:
         current_now = now or datetime.now(UTC)
@@ -36,29 +39,21 @@ class RiskEngine:
         if proposal.symbol not in self._settings.permitted_symbols:
             return RiskDecision(approved=False, reason=RejectionReason.INSTRUMENT_NOT_PERMITTED)
 
-        decimals_to_check: list[Decimal | None] = [
-            proposal.quantity,
-            proposal.notional_gbp,
-            proposal.reduce_fraction,
-            proposal.reference_price_gbp,
-            proposal.estimated_fee_gbp,
-            proposal.estimated_slippage_gbp,
-        ]
-        for value in decimals_to_check:
-            if value is None:
-                continue
-            if not value.is_finite():
-                return RiskDecision(approved=False, reason=RejectionReason.NON_FINITE_INPUT)
+        if proposal.quote_currency != self._settings.account_currency:
+            return RiskDecision(approved=False, reason=RejectionReason.CURRENCY_MISMATCH)
 
-        if proposal.estimated_fee_gbp < 0 or proposal.estimated_slippage_gbp < 0:
+        if intent is not None and intent.currency != self._settings.account_currency:
+            return RiskDecision(approved=False, reason=RejectionReason.CURRENCY_MISMATCH)
+
+        if proposal.idempotency_key in known_idempotency_keys:
+            return RiskDecision(approved=False, reason=RejectionReason.DUPLICATE_IDEMPOTENCY_KEY)
+
+        if proposal.estimated_fee < 0 or proposal.estimated_slippage < 0:
             return RiskDecision(approved=False, reason=RejectionReason.ESTIMATED_COST_INVALID)
 
         age_seconds = (current_now - proposal.reference_price_timestamp).total_seconds()
         if age_seconds > self._settings.max_stale_seconds:
             return RiskDecision(approved=False, reason=RejectionReason.STALE_REFERENCE_PRICE)
-
-        if proposal.idempotency_key in self._seen_idempotency_keys:
-            return RiskDecision(approved=False, reason=RejectionReason.DUPLICATE_IDEMPOTENCY_KEY)
 
         opening_action = proposal.action in {TradeAction.BUY, TradeAction.ADD}
         if control.kill_switch_active and opening_action:
@@ -67,39 +62,37 @@ class RiskEngine:
         if control.mode in {ExperimentMode.SAFE, ExperimentMode.DEAD} and opening_action:
             return RiskDecision(approved=False, reason=RejectionReason.MODE_RESTRICTION)
 
-        if proposal.action in {TradeAction.BUY, TradeAction.ADD, TradeAction.SELL}:
-            quantity = proposal.quantity
-            if quantity is None or quantity <= 0:
-                return RiskDecision(approved=False, reason=RejectionReason.NEGATIVE_OR_ZERO_INPUT)
+        if proposal.action == TradeAction.CANCEL and not proposal.cancel_order_id:
+            return RiskDecision(approved=False, reason=RejectionReason.CANCEL_TARGET_REQUIRED)
 
-        if proposal.action in {TradeAction.REDUCE, TradeAction.EXIT} and position_qty <= 0:
-            return RiskDecision(approved=False, reason=RejectionReason.SHORT_POSITION_FORBIDDEN)
+        if proposal.action in {TradeAction.HOLD, TradeAction.CANCEL}:
+            return RiskDecision(approved=True, reason=RejectionReason.APPROVED)
 
-        if proposal.action == TradeAction.REDUCE:
-            fraction = proposal.reduce_fraction
-            if fraction is None or fraction <= 0 or fraction > 1:
-                return RiskDecision(approved=False, reason=RejectionReason.NEGATIVE_OR_ZERO_INPUT)
+        if intent is None:
+            return RiskDecision(approved=False, reason=RejectionReason.INVALID_SCHEMA)
+
+        if proposal.notional is not None and proposal.quantity is not None:
+            if proposal.quantity * proposal.reference_price != proposal.notional:
+                return RiskDecision(approved=False, reason=RejectionReason.NOTIONAL_QUANTITY_MISMATCH)
+
+        if proposal.reference_price != intent.reference_price:
+            return RiskDecision(approved=False, reason=RejectionReason.NOTIONAL_QUANTITY_MISMATCH)
+
+        if proposal.action in {TradeAction.BUY, TradeAction.ADD} and intent.side != OrderSide.BUY:
+            return RiskDecision(approved=False, reason=RejectionReason.ACTION_NOT_PERMITTED)
 
         if proposal.action in {TradeAction.SELL, TradeAction.REDUCE, TradeAction.EXIT}:
-            sell_qty = proposal.quantity or Decimal("0")
-            if proposal.action == TradeAction.REDUCE and proposal.reduce_fraction is not None:
-                sell_qty = position_qty * proposal.reduce_fraction
-            if proposal.action == TradeAction.EXIT:
-                sell_qty = position_qty
-            if sell_qty <= 0 or sell_qty > position_qty:
+            if intent.side != OrderSide.SELL:
+                return RiskDecision(approved=False, reason=RejectionReason.ACTION_NOT_PERMITTED)
+            if intent.quantity <= 0 or intent.quantity > position_qty:
                 return RiskDecision(approved=False, reason=RejectionReason.SHORT_POSITION_FORBIDDEN)
 
-        if proposal.action in {TradeAction.BUY, TradeAction.ADD}:
-            if proposal.quantity is None:
-                return RiskDecision(approved=False, reason=RejectionReason.NEGATIVE_OR_ZERO_INPUT)
-            notional = proposal.quantity * proposal.reference_price_gbp
-            if proposal.notional_gbp is not None:
-                notional = proposal.notional_gbp
-            if notional > self._settings.max_order_notional_gbp:
-                return RiskDecision(approved=False, reason=RejectionReason.ORDER_NOTIONAL_LIMIT)
-            total_cost = notional + proposal.estimated_fee_gbp + proposal.estimated_slippage_gbp
-            if total_cost > portfolio_cash_gbp:
+        if intent.notional > self._settings.max_order_notional:
+            return RiskDecision(approved=False, reason=RejectionReason.ORDER_NOTIONAL_LIMIT)
+
+        if intent.side == OrderSide.BUY:
+            total_cost = intent.notional + proposal.estimated_fee + proposal.estimated_slippage
+            if total_cost > authorized_cash:
                 return RiskDecision(approved=False, reason=RejectionReason.INSUFFICIENT_CASH)
 
-        self._seen_idempotency_keys.add(proposal.idempotency_key)
         return RiskDecision(approved=True, reason=RejectionReason.APPROVED)

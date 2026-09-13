@@ -18,12 +18,15 @@ class SimulatedBroker:
     def __init__(
         self,
         *,
-        starting_cash_gbp: Decimal,
+        starting_cash: Decimal,
+        currency: str = "USD",
         fee_rate: Decimal = Decimal("0.001"),
         slippage_rate: Decimal = Decimal("0.001"),
         fail_with_unknown: bool = False,
+        reported_buying_power: Decimal | None = None,
     ) -> None:
-        self._cash = starting_cash_gbp
+        self._cash = starting_cash
+        self._currency = currency
         self._positions: dict[str, Position] = {}
         self._orders_by_key: dict[str, ExecutionReport] = {}
         self._broker_orders: dict[str, BrokerOrder] = {}
@@ -31,15 +34,25 @@ class SimulatedBroker:
         self._fee_rate = fee_rate
         self._slippage_rate = slippage_rate
         self._fail_with_unknown = fail_with_unknown
+        self._reported_buying_power = reported_buying_power or (starting_cash * Decimal("4"))
 
-    def set_mark_price(self, symbol: str, price_gbp: Decimal) -> None:
-        self._last_price[symbol] = price_gbp
+    @property
+    def reported_buying_power(self) -> Decimal:
+        return self._reported_buying_power
+
+    def set_mark_price(self, symbol: str, price: Decimal) -> None:
+        self._last_price[symbol] = price
 
     def get_portfolio(self) -> PortfolioState:
         nav = self._cash
         for symbol, position in self._positions.items():
             nav += position.quantity * self._last_price.get(symbol, position.average_price)
-        return PortfolioState(cash_gbp=self._cash, positions=self._positions, nav_gbp=nav)
+        return PortfolioState(
+            cash=self._cash,
+            positions=self._positions,
+            nav=nav,
+            currency=self._currency,
+        )
 
     def get_open_orders(self) -> list[BrokerOrder]:
         terminal = {OrderStatus.FILLED, OrderStatus.CANCELLED}
@@ -47,6 +60,8 @@ class SimulatedBroker:
 
     def cancel(self, broker_order_id: str) -> BrokerOrder:
         order = self._broker_orders[broker_order_id]
+        if order.status in {OrderStatus.FILLED, OrderStatus.CANCELLED}:
+            return order
         cancelled = order.model_copy(update={"status": OrderStatus.CANCELLED})
         self._broker_orders[broker_order_id] = cancelled
         return cancelled
@@ -73,9 +88,10 @@ class SimulatedBroker:
                 side=intent.side,
                 status=OrderStatus.UNKNOWN,
                 fill_quantity=Decimal("0"),
-                fill_price_gbp=intent.reference_price_gbp,
-                fee_gbp=Decimal("0"),
-                slippage_gbp=Decimal("0"),
+                fill_price=intent.reference_price,
+                fee=Decimal("0"),
+                slippage=Decimal("0"),
+                currency=self._currency,
                 message="ambiguous submission",
             )
             self._orders_by_key[intent.idempotency_key] = report
@@ -85,10 +101,10 @@ class SimulatedBroker:
         if intent.side == OrderSide.SELL:
             slippage_multiplier = Decimal("1") - self._slippage_rate
 
-        fill_price = intent.reference_price_gbp * slippage_multiplier
+        fill_price = intent.reference_price * slippage_multiplier
         notional = fill_price * intent.quantity
         fee = notional * self._fee_rate
-        slippage = abs(fill_price - intent.reference_price_gbp) * intent.quantity
+        slippage = abs(fill_price - intent.reference_price) * intent.quantity
 
         position = self._positions.get(intent.symbol)
         if intent.side == OrderSide.BUY:
@@ -146,9 +162,10 @@ class SimulatedBroker:
             side=intent.side,
             status=OrderStatus.FILLED,
             fill_quantity=intent.quantity,
-            fill_price_gbp=fill_price,
-            fee_gbp=fee,
-            slippage_gbp=slippage,
+            fill_price=fill_price,
+            fee=fee,
+            slippage=slippage,
+            currency=self._currency,
         )
         self._orders_by_key[intent.idempotency_key] = report
         self._last_price[intent.symbol] = fill_price

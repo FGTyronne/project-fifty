@@ -13,10 +13,12 @@ class Settings(BaseModel):
 
     env: str = Field(default="development", alias="PROJECT_FIFTY_ENV")
     log_level: str = Field(default="INFO", alias="PROJECT_FIFTY_LOG_LEVEL")
-    starting_cash_gbp: Decimal = Field(alias="PROJECT_FIFTY_STARTING_CASH_GBP")
+    inception_contribution_gbp: Decimal = Field(alias="PROJECT_FIFTY_STARTING_CASH_GBP")
+    account_currency: str = "USD"
+    authorized_starting_cash: Decimal = Decimal("50")
     kill_switch: bool = Field(default=False, alias="PROJECT_FIFTY_KILL_SWITCH")
     max_stale_seconds: int = 60
-    max_order_notional_gbp: Decimal = Decimal("50")
+    max_order_notional: Decimal = Decimal("50")
     permitted_symbols: frozenset[str] = frozenset({"TEST"})
 
     @classmethod
@@ -27,7 +29,14 @@ class Settings(BaseModel):
             "PROJECT_FIFTY_STARTING_CASH_GBP": parse_decimal(
                 os.getenv("PROJECT_FIFTY_STARTING_CASH_GBP", "50.00")
             ),
+            "account_currency": os.getenv("PROJECT_FIFTY_ACCOUNT_CURRENCY", "USD"),
+            "authorized_starting_cash": parse_decimal(
+                os.getenv("PROJECT_FIFTY_AUTHORIZED_STARTING_CASH", "50.00")
+            ),
             "PROJECT_FIFTY_KILL_SWITCH": os.getenv("PROJECT_FIFTY_KILL_SWITCH", "false").lower()
             in {"1", "true", "yes", "on"},
+            "max_order_notional": parse_decimal(
+                os.getenv("PROJECT_FIFTY_MAX_ORDER_NOTIONAL", "50.00")
+            ),
         }
         return cls.model_validate(data)

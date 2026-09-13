@@ -11,6 +11,6 @@ class ControlState(BaseModel):
     kill_switch_active: bool = False
 
     def transition_mode(self, next_mode: ExperimentMode, *, automatic: bool = False) -> None:
-        if self.mode == ExperimentMode.DEAD and next_mode != ExperimentMode.DEAD and automatic:
-            raise ValueError("DEAD mode cannot automatically transition to active modes")
+        if self.mode == ExperimentMode.DEAD and next_mode != ExperimentMode.DEAD:
+            raise ValueError("DEAD mode is terminal for this experiment")
         self.mode = next_mode
