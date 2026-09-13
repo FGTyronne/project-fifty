@@ -2,9 +2,6 @@ name: alpaca-m9-economic-validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - m9/single-market-trend
 
 permissions:
   contents: read
