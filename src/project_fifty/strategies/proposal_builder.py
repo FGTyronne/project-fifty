@@ -108,7 +108,15 @@ class ProposalBuilder:
                 continue
 
             if delta_notional > 0:
-                quantity = delta_notional / price
+                executable_notional = delta_notional
+                if current_quantity == 0 and not portfolio.positions:
+                    executable_notional = min(
+                        delta_notional,
+                        self._initial_buy_affordable_notional(portfolio.cash),
+                    )
+                if executable_notional < self._min_order_notional:
+                    continue
+                quantity = executable_notional / price
                 proposals.append(
                     self._proposal(
                         target=target,
@@ -116,7 +124,7 @@ class ProposalBuilder:
                         action=TradeAction.BUY if current_quantity == 0 else TradeAction.ADD,
                         quantity=quantity,
                         reduce_fraction=None,
-                        estimated_notional=delta_notional,
+                        estimated_notional=executable_notional,
                         reference_price=price,
                         reference_timestamp=timestamp,
                         ordinal=len(proposals),
@@ -155,6 +163,12 @@ class ProposalBuilder:
             sorted(proposals, key=lambda proposal: (priority[proposal.action], proposal.symbol)),
             plan,
         )
+
+    def _initial_buy_affordable_notional(self, cash: Decimal) -> Decimal:
+        available_after_fee = cash - self._estimated_fee
+        if available_after_fee <= 0:
+            return Decimal("0")
+        return available_after_fee / (Decimal("1") + self._estimated_slippage_rate)
 
     def _proposal(
         self,
