@@ -75,6 +75,7 @@ class ProposalBuilder:
                         action=TradeAction.BUY if current_quantity == 0 else TradeAction.ADD,
                         quantity=quantity,
                         reduce_fraction=None,
+                        estimated_notional=delta_notional,
                         reference_price=price,
                         reference_timestamp=timestamp,
                         ordinal=len(proposals),
@@ -93,6 +94,7 @@ class ProposalBuilder:
                         action=TradeAction.EXIT,
                         quantity=None,
                         reduce_fraction=None,
+                        estimated_notional=current_notional,
                         reference_price=price,
                         reference_timestamp=timestamp,
                         ordinal=len(proposals),
@@ -110,6 +112,7 @@ class ProposalBuilder:
                     action=TradeAction.REDUCE,
                     quantity=None,
                     reduce_fraction=reduce_fraction,
+                    estimated_notional=reduction_quantity * price,
                     reference_price=price,
                     reference_timestamp=timestamp,
                     ordinal=len(proposals),
@@ -133,14 +136,12 @@ class ProposalBuilder:
         action: TradeAction,
         quantity: Decimal | None,
         reduce_fraction: Decimal | None,
+        estimated_notional: Decimal,
         reference_price: Decimal,
         reference_timestamp: datetime,
         ordinal: int,
     ) -> TradeProposal:
-        requested_notional = (
-            quantity * reference_price if quantity is not None else reference_price
-        )
-        estimated_slippage = requested_notional * self._estimated_slippage_rate
+        estimated_slippage = estimated_notional * self._estimated_slippage_rate
         identity = (
             f"{target.strategy_id}|{target.strategy_version}|{target.market_state_hash}|"
             f"{symbol}|{action.value}|{ordinal}"
