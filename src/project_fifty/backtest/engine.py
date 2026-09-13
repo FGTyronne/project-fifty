@@ -11,6 +11,7 @@ from project_fifty.strategies.contracts import MarketBar, StrategyContext, Strat
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
+_CASH_EPSILON = Decimal("1e-12")
 
 
 @dataclass(frozen=True)
@@ -272,7 +273,7 @@ class BacktestEngine:
             notional = quantity * fill_price
             fee = notional * self._config.fee_rate
             total_cost = notional + fee
-            cash -= total_cost
+            cash = self._clamp_cash(cash - total_cost)
             turnover += notional
             costs += fee + quantity * (fill_price - price)
             trades += 1
@@ -314,6 +315,14 @@ class BacktestEngine:
             currency=self._config.currency,
             as_of=as_of,
         )
+
+    @staticmethod
+    def _clamp_cash(value: Decimal) -> Decimal:
+        if value >= _ZERO:
+            return value
+        if value >= -_CASH_EPSILON:
+            return _ZERO
+        raise RuntimeError("backtest attempted to spend materially more cash than available")
 
     @staticmethod
     def _bar_at(bars: tuple[MarketBar, ...], timestamp: datetime) -> MarketBar | None:
