@@ -2,9 +2,6 @@ name: alpaca-m6-economic-validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - m6/exit-persistence-churn
 
 permissions:
   contents: read
