@@ -19,6 +19,34 @@ def restore_control_state(*, ledger: Ledger, kill_switch_active: bool = False) -
     return ControlState(mode=mode, kill_switch_active=kill_switch_active)
 
 
+def transition_control_state(
+    *,
+    ledger: Ledger,
+    control: ControlState,
+    next_mode: ExperimentMode,
+    reason: str,
+    automatic: bool = True,
+) -> None:
+    previous = control.mode
+    if previous == next_mode:
+        return
+    if previous == ExperimentMode.DEAD and next_mode != ExperimentMode.DEAD:
+        raise ValueError("DEAD mode is terminal for this experiment")
+
+    # Persist the conservative target state before mutating process-local state. If the process
+    # dies between these two operations, the next runtime restores the stricter persisted mode.
+    ledger.append(
+        CONTROL_MODE_EVENT,
+        {
+            "from": previous.value,
+            "to": next_mode.value,
+            "reason": reason,
+            "automatic": automatic,
+        },
+    )
+    control.transition_mode(next_mode, automatic=automatic)
+
+
 def persist_control_transition(
     *,
     ledger: Ledger,
@@ -26,6 +54,7 @@ def persist_control_transition(
     control: ControlState,
     reason: str,
 ) -> None:
+    """Compatibility helper for callers that already changed the in-memory control state."""
     if previous == control.mode:
         return
     ledger.append(
@@ -34,5 +63,6 @@ def persist_control_transition(
             "from": previous.value,
             "to": control.mode.value,
             "reason": reason,
+            "automatic": True,
         },
     )
