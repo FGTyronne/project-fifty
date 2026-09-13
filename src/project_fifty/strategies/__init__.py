@@ -10,6 +10,10 @@ from project_fifty.strategies.confirmed import (
     ConfirmedPersistentRegimeTechnicalStrategy,
 )
 from project_fifty.strategies.contracts import MarketBar, StrategyProvider, TargetPortfolio
+from project_fifty.strategies.low_frequency import (
+    LowFrequencyMomentumConfig,
+    LowFrequencyMomentumStrategy,
+)
 from project_fifty.strategies.persistent import (
     PersistentBaselineConfig,
     PersistentRegimeTechnicalStrategy,
@@ -33,6 +37,8 @@ __all__ = [
     "ConfirmedPersistentRegimeTechnicalStrategy",
     "EconomicRebalanceConfig",
     "EconomicRebalancePolicy",
+    "LowFrequencyMomentumConfig",
+    "LowFrequencyMomentumStrategy",
     "MarketBar",
     "PersistentBaselineConfig",
     "PersistentRegimeTechnicalStrategy",
