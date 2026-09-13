@@ -62,6 +62,7 @@ class SessionCycleResult:
     proposal_count: int
     approved_count: int
     rejected_count: int
+    suppressed_count: int = 0
     skipped_reason: str | None = None
 
 
@@ -167,7 +168,7 @@ class AutonomousSessionRunner:
             benchmark_symbol=self._universe.benchmark_symbol,
         )
         target = self._strategy.generate_target(context)
-        proposals = self._proposal_builder.build(target=target, context=context)
+        proposals, plan = self._proposal_builder.build_with_plan(target=target, context=context)
 
         approved = 0
         rejected = 0
@@ -177,6 +178,14 @@ class AutonomousSessionRunner:
                 approved += 1
             else:
                 rejected += 1
+
+        suppressed_reasons: dict[str, int] = {}
+        suppressed_count = 0
+        if plan is not None:
+            suppressed_count = len(plan.suppressed)
+            for instruction in plan.suppressed:
+                reason = instruction.reason.value
+                suppressed_reasons[reason] = suppressed_reasons.get(reason, 0) + 1
 
         self._ledger.append(
             "strategy_cycle_completed",
@@ -189,6 +198,8 @@ class AutonomousSessionRunner:
                 "proposal_count": len(proposals),
                 "approved_count": approved,
                 "rejected_count": rejected,
+                "suppressed_count": suppressed_count,
+                "suppressed_reasons": suppressed_reasons,
             },
         )
         return SessionCycleResult(
@@ -198,6 +209,7 @@ class AutonomousSessionRunner:
             proposal_count=len(proposals),
             approved_count=approved,
             rejected_count=rejected,
+            suppressed_count=suppressed_count,
         )
 
     def run_until_close(
