@@ -4,11 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "project-fifty"
-version = "0.1.0"
-description = "Project Fifty autonomous trading kernel (M1)"
+version = "0.2.0"
+description = "Project Fifty autonomous trading system"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "httpx>=0.28,<1",
   "pydantic>=2.9,<3",
 ]
 
