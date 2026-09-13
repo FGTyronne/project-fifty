@@ -2,9 +2,6 @@ name: alpaca-m5-economic-validation
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - m5/economic-hardening
 
 permissions:
   contents: read
