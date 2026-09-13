@@ -1,0 +1,37 @@
+{
+  "experiment": "Project Fifty",
+  "environment": "alpaca-paper",
+  "constitutional_contribution": {
+    "amount": "50.00",
+    "currency": "GBP"
+  },
+  "paper_execution_envelope": {
+    "amount": "67.6725",
+    "currency": "USD"
+  },
+  "fx_conversion": {
+    "pair": "GBP/USD",
+    "rate": "1.35345",
+    "rate_timestamp_utc": "2026-09-13T12:06:00+00:00",
+    "calculation": "50.00 * 1.35345 = 67.6725"
+  },
+  "broker_reported_balances_are_authority": false,
+  "paper_broker_observed": {
+    "cash": "100000",
+    "equity": "100000",
+    "buying_power": "400000",
+    "currency": "USD"
+  },
+  "policy": {
+    "recapitalisation_permitted": false,
+    "margin_permitted": false,
+    "shorting_permitted": false,
+    "derivatives_permitted": false,
+    "transfers_permitted": false
+  },
+  "notes": [
+    "This is a paper-only inception proxy, not the future live brokerage inception cash.",
+    "A future live launch must separately record actual net brokerage cash after real funding and FX costs.",
+    "The Alpaca paper account's reported cash and buying power are reconciliation data only and must never expand Project Fifty's internal authority."
+  ]
+}
