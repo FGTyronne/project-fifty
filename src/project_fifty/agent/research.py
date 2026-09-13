@@ -110,7 +110,7 @@ def validate_council_output(
     context: StrategyContext,
     assessments: tuple[ResearchAssessment, ...],
 ) -> None:
-    """Reject agent output that escapes the deterministic candidate or market-state boundary."""
+    """Reject agent output that escapes candidate, time or market-state boundaries."""
 
     allowed = set(candidates)
     seen: set[str] = set()
@@ -121,4 +121,7 @@ def validate_council_output(
             raise ValueError("research council returned duplicate candidate assessments")
         if assessment.market_state_hash != context.market_state_hash:
             raise ValueError("research council output is stale")
+        for item in assessment.evidence:
+            if item.observed_at > context.as_of:
+                raise ValueError("research council evidence is from the future")
         seen.add(assessment.symbol)
