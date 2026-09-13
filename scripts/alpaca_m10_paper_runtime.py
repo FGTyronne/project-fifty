@@ -17,7 +17,11 @@ from project_fifty.market_data.alpaca import AlpacaMarketDataConfig
 from project_fifty.market_data.research import AlpacaResearchMarketDataClient
 from project_fifty.market_data.universe import SingleInstrumentUniverse
 from project_fifty.risk.engine import RiskEngine
-from project_fifty.session.runner import AutonomousSessionRunner, SessionConfig
+from project_fifty.session.runner import (
+    AutonomousSessionRunner,
+    SessionConfig,
+    SessionCycleResult,
+)
 from project_fifty.session.runtime_state import expected_position_quantities, pending_orders
 from project_fifty.strategies.m9 import M9_TIMEFRAME, m9_rebalance_policy
 from project_fifty.strategies.proposal_builder import ProposalBuilder
@@ -48,7 +52,11 @@ def _validated_settings() -> Settings:
 
 
 def _count_submissions(ledger: LocalAppendOnlyLedger) -> int:
-    return sum(1 for event in ledger.all_events() if event.event_type == "broker_submission_attempt")
+    return sum(
+        1
+        for event in ledger.all_events()
+        if event.event_type == "broker_submission_attempt"
+    )
 
 
 def _write_summary(
@@ -59,7 +67,7 @@ def _write_summary(
     broker_consistent: bool,
     pending_count: int,
     submissions_this_run: int,
-    result: object | None,
+    result: SessionCycleResult | None,
 ) -> None:
     payload: dict[str, object] = {
         "generated_at_utc": generated_at.isoformat(),
@@ -74,17 +82,17 @@ def _write_summary(
     }
     if result is not None:
         payload["cycle"] = {
-            "market_open": getattr(result, "market_open"),
+            "market_open": result.market_open,
             "decision_bar_time": (
-                getattr(result, "decision_bar_time").isoformat()
-                if getattr(result, "decision_bar_time") is not None
+                result.decision_bar_time.isoformat()
+                if result.decision_bar_time is not None
                 else None
             ),
-            "proposal_count": getattr(result, "proposal_count"),
-            "approved_count": getattr(result, "approved_count"),
-            "rejected_count": getattr(result, "rejected_count"),
-            "suppressed_count": getattr(result, "suppressed_count"),
-            "skipped_reason": getattr(result, "skipped_reason"),
+            "proposal_count": result.proposal_count,
+            "approved_count": result.approved_count,
+            "rejected_count": result.rejected_count,
+            "suppressed_count": result.suppressed_count,
+            "skipped_reason": result.skipped_reason,
         }
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -128,7 +136,6 @@ def main() -> None:
             control=control,
         )
 
-        # Resolve every known non-terminal economic order before any new strategy decision.
         for pending in pending_orders(ledger):
             report = broker.get_order_by_client_order_id(
                 pending.idempotency_key,
@@ -184,8 +191,6 @@ def main() -> None:
             )
             raise RuntimeError("Project Fifty is DEAD and cannot resume this experiment")
 
-        # A still-open order owns the economic transition. Wait for it to become terminal rather
-        # than allowing a fresh quote/hash to create a second BUY or SELL after restart.
         if still_pending:
             ledger.append(
                 "paper_runtime_skipped",
