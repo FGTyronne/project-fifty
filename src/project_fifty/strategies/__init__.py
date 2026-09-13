@@ -22,6 +22,10 @@ from project_fifty.strategies.rebalance import (
     RebalancePlan,
     RebalanceReason,
 )
+from project_fifty.strategies.regime_persistent import (
+    RegimePersistenceDiagnostics,
+    RegimePersistentConfirmedStrategy,
+)
 
 __all__ = [
     "BaselineConfig",
@@ -37,6 +41,8 @@ __all__ = [
     "RebalancePlan",
     "RebalanceReason",
     "RegimeAwareTechnicalStrategy",
+    "RegimePersistenceDiagnostics",
+    "RegimePersistentConfirmedStrategy",
     "RegimeState",
     "StrategyProvider",
     "TargetPortfolio",
