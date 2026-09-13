@@ -5,6 +5,10 @@ from project_fifty.strategies.baseline import (
     RegimeAwareTechnicalStrategy,
     RegimeState,
 )
+from project_fifty.strategies.confirmed import (
+    ConfirmedPersistentConfig,
+    ConfirmedPersistentRegimeTechnicalStrategy,
+)
 from project_fifty.strategies.contracts import MarketBar, StrategyProvider, TargetPortfolio
 from project_fifty.strategies.persistent import (
     PersistentBaselineConfig,
@@ -21,6 +25,8 @@ from project_fifty.strategies.rebalance import (
 
 __all__ = [
     "BaselineConfig",
+    "ConfirmedPersistentConfig",
+    "ConfirmedPersistentRegimeTechnicalStrategy",
     "EconomicRebalanceConfig",
     "EconomicRebalancePolicy",
     "MarketBar",
