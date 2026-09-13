@@ -187,12 +187,16 @@ class AlpacaPaperBroker:
 
     def cancel(self, broker_order_id: str) -> BrokerOrder:
         before = self._get_order_raw(broker_order_id)
+        if before is None:
+            raise RuntimeError("broker order disappeared before cancellation")
+
         response = self._request("DELETE", f"/v2/orders/{quote(broker_order_id, safe='')}")
         if response.status_code not in {204, 422}:
             response.raise_for_status()
 
-        after = self._get_order_raw(broker_order_id, allow_missing=True) or before
-        broker_order = self._to_broker_order(after)
+        after = self._get_order_raw(broker_order_id, allow_missing=True)
+        resolved_order = after if after is not None else before
+        broker_order = self._to_broker_order(resolved_order)
         if response.status_code == 422 and broker_order.status not in {
             OrderStatus.FILLED,
             OrderStatus.CANCELLED,
