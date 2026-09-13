@@ -102,7 +102,7 @@ def main() -> None:
         "spy_active_tradable_fractionable": spy_ready,
         "history_anchor_fixed": HISTORY_START.isoformat() == "2020-01-02T00:00:00+00:00",
         "history_sufficient": len(bars) >= 200,
-        "paper_orders_submitted": True,
+        "zero_order_submission_path": True,
     }
     ready = all(readiness_checks.values())
 
