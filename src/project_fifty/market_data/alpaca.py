@@ -96,15 +96,24 @@ class MarketQuote:
             raise ValueError("quote symbol is required")
         if not self.bid.is_finite() or not self.ask.is_finite():
             raise ValueError("quote prices must be finite")
-        if self.bid < 0 or self.ask <= 0 or self.ask < self.bid:
-            raise ValueError("invalid bid/ask quote")
+        if self.bid < 0 or self.ask < 0:
+            raise ValueError("quote prices must be non-negative")
+        if self.bid == 0 and self.ask == 0:
+            raise ValueError("quote must contain at least one positive side")
         if self.timestamp.tzinfo is None:
             raise ValueError("quote timestamp must be timezone-aware")
+
+    @property
+    def is_actionable(self) -> bool:
+        """True only for a positive, non-crossed two-sided quote."""
+        return self.bid > 0 and self.ask > 0 and self.ask >= self.bid
 
     @property
     def midpoint(self) -> Decimal:
         if self.bid == 0:
             return self.ask
+        if self.ask == 0:
+            return self.bid
         return (self.bid + self.ask) / Decimal("2")
 
 
@@ -244,7 +253,7 @@ class AlpacaMarketDataClient:
             quotes[symbol] = MarketQuote(
                 symbol=symbol,
                 bid=self._decimal(quote.get("bp") or "0"),
-                ask=self._decimal(quote.get("ap")),
+                ask=self._decimal(quote.get("ap") or "0"),
                 timestamp=self._timestamp(quote.get("t")),
             )
         return quotes
