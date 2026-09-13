@@ -35,8 +35,14 @@ class LedgerBackedControlState(ControlState):
 
     _ledger: Ledger = PrivateAttr()
 
-    def __init__(self, *, ledger: Ledger, **data: object) -> None:
-        super().__init__(**data)
+    def __init__(
+        self,
+        *,
+        ledger: Ledger,
+        mode: ExperimentMode = ExperimentMode.NORMAL,
+        kill_switch_active: bool = False,
+    ) -> None:
+        super().__init__(mode=mode, kill_switch_active=kill_switch_active)
         self._ledger = ledger
 
     @classmethod
@@ -93,7 +99,6 @@ def transition_control_state(
             "automatic": automatic,
         },
     )
-    # Avoid double-writing when the caller supplied the ledger-backed implementation.
     if isinstance(control, LedgerBackedControlState):
         ControlState.transition_mode(control, next_mode, automatic=automatic)
     else:
