@@ -4,22 +4,55 @@
 
 ## Current status
 
-**DEVELOPMENT — Stage 1 / Milestone 1 kernel implemented (simulated only)**
+**DEVELOPMENT — Stage 2 / Alpaca paper integration implemented and mock-tested**
 
-No live brokerage account is connected. No live trading is enabled.
+The broker-independent autonomous kernel is merged on `main`. The current development branch adds an Alpaca **paper-only** adapter. No live trading is enabled and no real credentials are stored in this repository.
 
-## Milestone 1 autonomous kernel
+Authenticated read-only paper connectivity and the first controlled paper order remain external acceptance gates before M2 is complete.
 
-This repository now includes a broker-independent autonomous trading kernel with:
+## Autonomous kernel
+
+Project Fifty currently includes:
 
 - typed domain models (`TradeProposal`, `PortfolioState`, `Position`, `OrderIntent`, `BrokerOrder`, `ExecutionReport`, `RiskDecision`, `LedgerEvent`, `ExperimentMode`);
-- deterministic constitutional risk validation;
-- replaceable broker adapter protocol and deterministic simulated broker;
-- explicit execution flow with idempotency protection;
-- append-only local ledger implementation;
-- deterministic portfolio replay/reconciliation utilities;
+- deterministic constitutional risk validation before broker submission;
+- an internal capital envelope that is independent of broker cash or buying power;
+- replaceable broker adapters;
+- deterministic simulated execution;
+- restart-safe idempotency and order recovery;
+- asynchronous order-state handling and capital reservation;
+- cumulative partial-fill reconciliation without double-counting;
+- end-to-end cancellation handling;
+- tamper-evident append-only ledger persistence;
+- deterministic portfolio replay and reconciliation;
 - control modes (`NORMAL`, `DEFENSIVE`, `SAFE`, `DEAD`) and kill-switch enforcement;
-- structured JSON logging helpers.
+- terminal `DEAD` experiment state;
+- structured logging and broker request-ID audit support.
+
+## Alpaca paper adapter
+
+The M2 adapter is deliberately restricted to:
+
+```text
+https://paper-api.alpaca.markets
+```
+
+It supports:
+
+- paper account and market-clock retrieval;
+- asset `tradable` and `fractionable` validation;
+- fractional quantity orders;
+- deterministic `client_order_id` generation;
+- order recovery by broker order ID or client order ID;
+- open-order and position retrieval;
+- cancellation;
+- ambiguous-timeout recovery without blind resubmission;
+- Alpaca `X-Request-ID` persistence;
+- quantity-aware broker/internal state checks that force `SAFE` on divergence.
+
+The adapter contains no funding, transfer, margin, short-selling, derivatives or live-trading path.
+
+Alpaca's simulated paper balance and buying power are reconciliation data only. They **cannot expand Project Fifty's constitutional capital authority**.
 
 ## Quickstart
 
@@ -30,30 +63,37 @@ mypy
 pytest -q
 ```
 
-## Deterministic demonstration
+## Read-only Alpaca paper connectivity
 
-The required M1 autonomous demonstration is covered by:
+Paper credentials must be supplied at runtime only. Never commit them.
+
+```text
+ALPACA_PAPER_API_KEY=<runtime secret>
+ALPACA_PAPER_API_SECRET=<runtime secret>
+ALPACA_PAPER_BASE_URL=https://paper-api.alpaca.markets
+```
+
+Once those variables are available to the local/runtime process:
+
+```bash
+python scripts/alpaca_paper_connectivity.py
+```
+
+The connectivity command only reads account and market-clock state. It cannot submit or cancel an order and does not print account identifiers or credentials.
+
+See `docs/runbooks/alpaca-paper.md` for the controlled paper-testing sequence.
+
+## M1 deterministic demonstration
+
+The original M1 autonomous demonstration is covered by:
 
 - `tests/integration/test_kernel.py::test_demo_flow_hold_buy_reduce_exit`
 
-Scenario:
-
-- start cash `£50.00`;
-- `HOLD` (no order);
-- autonomous `BUY £7.50 TEST`;
-- autonomous `REDUCE 40%`;
-- autonomous `EXIT` remainder;
-- reconciled final NAV and immutable ordered ledger history.
-
-## Design limitations (intentional for M1)
-
-- Simulated broker fills synchronously for deterministic tests.
-- Instrument universe is a minimal configured placeholder (`TEST`) for constitutional guardrail verification.
-- `CANCEL` action is modelled but not exercised with partial/live order-book simulation in M1.
+The M2 suite extends this with broker contract tests and asynchronous execution tests covering reserved capital, restart recovery, partial fills, cancellation and broker-state divergence.
 
 ## Security
 
-Never commit real credentials. `.env.example` intentionally contains no secrets.
+Never commit real credentials. `.env.example` intentionally contains variable names and non-secret defaults only. Local `.env` files, `state/`, `secrets/`, keys and common credential files are ignored.
 
 ## Licence
 
