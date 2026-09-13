@@ -171,6 +171,17 @@ class AlpacaMarketDataClient:
         if limit <= 0 or limit > 10000:
             raise ValueError("limit must be in [1, 10000]")
 
+        if end - start > timedelta(days=45):
+            return self.get_bars_windowed(
+                clean_symbols,
+                start=start,
+                end=end,
+                timeframe=timeframe,
+                chunk_days=30,
+                symbol_batch_size=4,
+                limit=limit,
+            )
+
         bars_by_symbol: dict[str, dict[datetime, MarketBar]] = {
             symbol: {} for symbol in clean_symbols
         }
@@ -259,6 +270,8 @@ class AlpacaMarketDataClient:
         }
         cursor = start
         chunk = timedelta(days=chunk_days)
+        requested_start = start.astimezone(UTC)
+        requested_end = end.astimezone(UTC)
 
         while cursor < end:
             window_end = min(cursor + chunk, end)
@@ -273,7 +286,7 @@ class AlpacaMarketDataClient:
                 )
                 for symbol, observations in bars.items():
                     for bar in observations:
-                        if bar.timestamp < start.astimezone(UTC) or bar.timestamp > end.astimezone(UTC):
+                        if bar.timestamp < requested_start or bar.timestamp > requested_end:
                             raise ValueError("windowed market data escaped requested bounds")
                         combined[symbol][bar.timestamp] = bar
             cursor = window_end
