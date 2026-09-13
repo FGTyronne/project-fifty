@@ -30,6 +30,10 @@ from project_fifty.strategies.regime_persistent import (
     RegimePersistenceDiagnostics,
     RegimePersistentConfirmedStrategy,
 )
+from project_fifty.strategies.single_market import (
+    SingleMarketTrendConfig,
+    SingleMarketTrendStrategy,
+)
 
 __all__ = [
     "BaselineConfig",
@@ -50,6 +54,8 @@ __all__ = [
     "RegimePersistenceDiagnostics",
     "RegimePersistentConfirmedStrategy",
     "RegimeState",
+    "SingleMarketTrendConfig",
+    "SingleMarketTrendStrategy",
     "StrategyProvider",
     "TargetPortfolio",
 ]

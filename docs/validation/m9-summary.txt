@@ -1,0 +1,10 @@
+M9 frozen validation status: PASS
+Workflow run: 34765652270
+Strategy: single-market-trend-baseline v6.0.0
+Holdout return: +12.4954%
+Holdout max drawdown: -4.8689%
+Trades: 3 / 234 decision points
+Walk-forward: 3 / 3 non-negative; median +4.1007%
+Paper orders submitted during validation: 0
+SPY buy-and-hold over comparable holdout: +22.2114%
+Interpretation: M9 passed its frozen gate but did not outperform passive SPY.
