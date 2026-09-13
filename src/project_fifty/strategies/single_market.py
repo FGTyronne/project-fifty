@@ -91,7 +91,9 @@ class SingleMarketTrendStrategy:
                 evidence=evidence,
             )
 
-        evidence["selection"] = "EXIT_TO_CASH" if symbol in context.portfolio.positions else "HOLD_CASH"
+        evidence["selection"] = (
+            "EXIT_TO_CASH" if symbol in context.portfolio.positions else "HOLD_CASH"
+        )
         return self._cash(context, evidence=evidence)
 
     def _momentum(self, bars: tuple[MarketBar, ...]) -> Decimal:
