@@ -6,7 +6,13 @@ from pathlib import Path
 from project_fifty.brokers.simulated.broker import SimulatedBroker
 from project_fifty.config.settings import Settings
 from project_fifty.control.state import ControlState
-from project_fifty.domain.models import OrderStatus, RejectionReason, TradeAction
+from project_fifty.domain.models import (
+    ExecutionReport,
+    OrderIntent,
+    OrderStatus,
+    RejectionReason,
+    TradeAction,
+)
 from project_fifty.execution.kernel import ExecutionKernel
 from project_fifty.ledger.local import LocalAppendOnlyLedger
 from project_fifty.risk.engine import RiskEngine
@@ -18,7 +24,7 @@ class CountingBroker(SimulatedBroker):
         super().__init__(starting_cash=starting_cash, fail_with_unknown=fail_with_unknown)
         self.submit_calls = 0
 
-    def submit(self, intent):  # type: ignore[override]
+    def submit(self, intent: OrderIntent) -> ExecutionReport:
         self.submit_calls += 1
         return super().submit(intent)
 
@@ -128,7 +134,10 @@ def test_currency_mismatch_rejected(settings: Settings) -> None:
     assert report is None
 
 
-def test_idempotency_key_cannot_create_two_fills(settings: Settings, control: ControlState) -> None:
+def test_idempotency_key_cannot_create_two_fills(
+    settings: Settings,
+    control: ControlState,
+) -> None:
     broker = SimulatedBroker(starting_cash=Decimal("50"))
     kernel = _kernel(settings=settings, broker=broker, control=control)
 
@@ -178,7 +187,11 @@ def test_restart_cannot_duplicate_ambiguous_order(settings: Settings, tmp_path: 
 
 
 def test_valid_small_purchase_executes_and_updates_state(settings: Settings) -> None:
-    broker = SimulatedBroker(starting_cash=Decimal("50"), fee_rate=Decimal("0"), slippage_rate=Decimal("0"))
+    broker = SimulatedBroker(
+        starting_cash=Decimal("50"),
+        fee_rate=Decimal("0"),
+        slippage_rate=Decimal("0"),
+    )
     kernel = _kernel(settings=settings, broker=broker)
     proposal = make_proposal(
         proposal_id="buy1",
@@ -228,7 +241,11 @@ def test_cancel_executes_end_to_end(settings: Settings) -> None:
 
 
 def test_valid_reduction_and_exit_executes_autonomously(settings: Settings) -> None:
-    broker = SimulatedBroker(starting_cash=Decimal("50"), fee_rate=Decimal("0"), slippage_rate=Decimal("0"))
+    broker = SimulatedBroker(
+        starting_cash=Decimal("50"),
+        fee_rate=Decimal("0"),
+        slippage_rate=Decimal("0"),
+    )
     kernel = _kernel(settings=settings, broker=broker)
 
     buy = make_proposal(
@@ -265,7 +282,11 @@ def test_valid_reduction_and_exit_executes_autonomously(settings: Settings) -> N
 
 def test_demo_flow_hold_buy_reduce_exit(settings: Settings) -> None:
     ledger = LocalAppendOnlyLedger()
-    broker = SimulatedBroker(starting_cash=Decimal("50"), fee_rate=Decimal("0"), slippage_rate=Decimal("0"))
+    broker = SimulatedBroker(
+        starting_cash=Decimal("50"),
+        fee_rate=Decimal("0"),
+        slippage_rate=Decimal("0"),
+    )
     kernel = ExecutionKernel(
         settings=settings,
         risk_engine=RiskEngine(settings),
