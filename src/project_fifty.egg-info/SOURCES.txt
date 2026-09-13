@@ -1,9 +1,0 @@
-README.md
-pyproject.toml
-src/project_fifty/__init__.py
-src/project_fifty/kernel.py
-src/project_fifty.egg-info/PKG-INFO
-src/project_fifty.egg-info/SOURCES.txt
-src/project_fifty.egg-info/dependency_links.txt
-src/project_fifty.egg-info/top_level.txt
-tests/test_kernel.py
