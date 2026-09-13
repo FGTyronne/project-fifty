@@ -148,6 +148,8 @@ class AutonomousSessionRunner:
             for quote in quotes.values()
         ):
             return self._skip(current, "stale_quote")
+        if any(not quote.is_actionable for quote in quotes.values()):
+            return self._skip(current, "non_actionable_quote")
 
         mark_prices = {symbol: quote.midpoint for symbol, quote in quotes.items()}
         portfolio = self._authorized_portfolio(mark_prices)
