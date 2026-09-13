@@ -11,7 +11,7 @@ from project_fifty.domain.models import ExecutionReport, PortfolioState, RiskDec
 from project_fifty.ledger.base import Ledger
 from project_fifty.market_data.alpaca import MarketQuote
 from project_fifty.market_data.state import market_state_hash
-from project_fifty.market_data.universe import CandidateUniverse
+from project_fifty.market_data.universe import MarketUniverse
 from project_fifty.portfolio.reconcile import PortfolioReconciler
 from project_fifty.strategies.contracts import MarketBar, StrategyContext, StrategyProvider
 from project_fifty.strategies.proposal_builder import ProposalBuilder
@@ -47,11 +47,14 @@ class SessionConfig:
     timeframe: str = "5Min"
     timeframe_seconds: int = 300
     history_days: int = 14
+    history_start: datetime | None = None
     poll_seconds: int = 60
 
     def __post_init__(self) -> None:
         if min(self.timeframe_seconds, self.history_days, self.poll_seconds) <= 0:
             raise ValueError("session timing values must be positive")
+        if self.history_start is not None and self.history_start.tzinfo is None:
+            raise ValueError("history_start must be timezone-aware")
 
 
 @dataclass(frozen=True)
@@ -78,7 +81,7 @@ class AutonomousSessionRunner:
         self,
         *,
         settings: Settings,
-        universe: CandidateUniverse,
+        universe: MarketUniverse,
         market_data: MarketDataProvider,
         market_clock: MarketClockProvider,
         strategy: StrategyProvider,
@@ -116,7 +119,9 @@ class AutonomousSessionRunner:
             sorted(set(self._universe.all_symbols) | set(provisional.positions))
         )
         end = current - timedelta(seconds=self._config.timeframe_seconds)
-        start = end - timedelta(days=self._config.history_days)
+        start = self._config.history_start or (end - timedelta(days=self._config.history_days))
+        if start >= end:
+            return self._skip(current, "invalid_history_window")
         history = self._market_data.get_bars(
             symbols,
             start=start,

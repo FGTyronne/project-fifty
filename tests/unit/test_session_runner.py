@@ -48,6 +48,7 @@ class FakeMarketData:
         self.now = now
         self.stale_quotes = stale_quotes
         self.bar_calls = 0
+        self.last_start: datetime | None = None
         start = now - timedelta(minutes=5 * 72)
         self.history: dict[str, tuple[MarketBar, ...]] = {}
         for symbol, price in (("AAPL", Decimal("100")), ("SPY", Decimal("500"))):
@@ -75,7 +76,8 @@ class FakeMarketData:
         timeframe: str = "5Min",
         limit: int = 10000,
     ) -> dict[str, tuple[MarketBar, ...]]:
-        del start, end, timeframe, limit
+        del end, timeframe, limit
+        self.last_start = start
         self.bar_calls += 1
         return {symbol: self.history[symbol] for symbol in symbols}
 
@@ -115,6 +117,7 @@ def _runner(
     market_data: FakeMarketData,
     clock: FakeClock,
     handler: FakeHandler,
+    config: SessionConfig | None = None,
 ) -> AutonomousSessionRunner:
     return AutonomousSessionRunner(
         settings=_settings(),
@@ -125,7 +128,7 @@ def _runner(
         proposal_builder=ProposalBuilder(estimated_slippage_rate=Decimal("0")),
         proposal_handler=handler,
         ledger=LocalAppendOnlyLedger(ledger_path),
-        config=SessionConfig(poll_seconds=1),
+        config=config or SessionConfig(poll_seconds=1),
     )
 
 
@@ -158,6 +161,24 @@ def test_session_cycle_generates_risk_routed_proposal_and_persists_bar(tmp_path:
     assert len(handler.proposals) == 1
     assert second.skipped_reason == "duplicate_decision_bar"
     assert len(handler.proposals) == 1
+
+
+def test_fixed_history_anchor_is_used_instead_of_rolling_window(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 14, 15, 0, tzinfo=UTC)
+    anchor = datetime(2020, 1, 2, tzinfo=UTC)
+    data = FakeMarketData(now)
+    runner = _runner(
+        now=now,
+        ledger_path=tmp_path / "ledger.jsonl",
+        market_data=data,
+        clock=FakeClock(True),
+        handler=FakeHandler(),
+        config=SessionConfig(history_start=anchor, poll_seconds=1),
+    )
+
+    runner.run_cycle(now=now)
+
+    assert data.last_start == anchor
 
 
 def test_stale_quotes_skip_entire_cycle(tmp_path: Path) -> None:
