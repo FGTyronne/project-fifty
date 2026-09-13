@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 
 from project_fifty.strategies.baseline import (
@@ -82,7 +83,9 @@ class ConfirmedPersistentRegimeTechnicalStrategy(RegimeAwareTechnicalStrategy):
         }
 
         if budget == _ZERO:
-            evidence["selection"] = "SHOCK_EXIT" if regime == RegimeState.SHOCK else "ZERO_BUDGET_EXIT"
+            evidence["selection"] = (
+                "SHOCK_EXIT" if regime == RegimeState.SHOCK else "ZERO_BUDGET_EXIT"
+            )
             return self._cash_target(context, confidence=Decimal("0.90"), evidence=evidence)
 
         signals: dict[str, SignalBreakdown] = {}
@@ -106,6 +109,7 @@ class ConfirmedPersistentRegimeTechnicalStrategy(RegimeAwareTechnicalStrategy):
         for symbol in sorted(incumbent_symbols):
             signal = signals.get(symbol)
             if signal is None:
+                selected.append(self._placeholder_signal(symbol, cfg.retention_score))
                 evidence[f"{symbol}.selection"] = "EXIT_UNCONFIRMED"
                 continue
             if signal.score >= cfg.retention_score:
@@ -169,7 +173,9 @@ class ConfirmedPersistentRegimeTechnicalStrategy(RegimeAwareTechnicalStrategy):
             selected.remove(weakest)
             selected.append(candidate)
             evidence[f"{weakest.symbol}.selection"] = f"REPLACED_BY={candidate.symbol}"
-            evidence[f"{candidate.symbol}.selection"] = f"REPLACEMENT_CONFIRMED={weakest.symbol}"
+            evidence[f"{candidate.symbol}.selection"] = (
+                f"REPLACEMENT_CONFIRMED={weakest.symbol}"
+            )
 
         selected.sort(key=lambda item: (-item.score, item.symbol))
         if not selected:
@@ -263,11 +269,11 @@ class ConfirmedPersistentRegimeTechnicalStrategy(RegimeAwareTechnicalStrategy):
         symbol: str,
         bars: tuple[MarketBar, ...],
         count: int,
-    ) -> tuple[tuple[object, Decimal], ...] | None:
+    ) -> tuple[tuple[datetime, Decimal], ...] | None:
         if len(bars) < count:
             return None
         start_end = len(bars) - count + 1
-        series: list[tuple[object, Decimal]] = []
+        series: list[tuple[datetime, Decimal]] = []
         for end_index in range(start_end, len(bars) + 1):
             window = bars[:end_index]
             signal = self._score_symbol(symbol, window)
@@ -275,3 +281,17 @@ class ConfirmedPersistentRegimeTechnicalStrategy(RegimeAwareTechnicalStrategy):
                 return None
             series.append((window[-1].timestamp, signal.score))
         return tuple(series)
+
+    @staticmethod
+    def _placeholder_signal(symbol: str, score: Decimal) -> SignalBreakdown:
+        return SignalBreakdown(
+            symbol=symbol,
+            score=score,
+            trend=_ZERO,
+            short_momentum=_ZERO,
+            medium_momentum=_ZERO,
+            mean_reversion=_ZERO,
+            breakout=_ZERO,
+            volume_confirmation=_ZERO,
+            volatility_penalty=_ZERO,
+        )
