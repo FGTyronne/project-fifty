@@ -22,6 +22,32 @@ class AssetLookup(Protocol):
     def get_asset(self, symbol: str) -> dict[str, object]: ...
 
 
+class MarketUniverse(Protocol):
+    """Minimal universe contract required by the autonomous session runner."""
+
+    benchmark_symbol: str
+
+    @property
+    def all_symbols(self) -> tuple[str, ...]: ...
+
+
+@dataclass(frozen=True)
+class SingleInstrumentUniverse:
+    """A one-instrument universe for strategies such as M9's SPY/cash baseline."""
+
+    benchmark_symbol: str = DEFAULT_BENCHMARK
+
+    def __post_init__(self) -> None:
+        normalized = self.benchmark_symbol.strip().upper()
+        if not normalized:
+            raise ValueError("benchmark symbol is required")
+        object.__setattr__(self, "benchmark_symbol", normalized)
+
+    @property
+    def all_symbols(self) -> tuple[str, ...]:
+        return (self.benchmark_symbol,)
+
+
 @dataclass(frozen=True)
 class CandidateUniverse:
     symbols: tuple[str, ...]
