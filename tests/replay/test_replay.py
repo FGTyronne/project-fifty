@@ -23,9 +23,10 @@ def make_fill(
         side=side,
         status=OrderStatus.FILLED,
         fill_quantity=Decimal(qty),
-        fill_price_gbp=Decimal(price),
-        fee_gbp=Decimal(fee),
-        slippage_gbp=Decimal("0"),
+        fill_price=Decimal(price),
+        fee=Decimal(fee),
+        slippage=Decimal("0"),
+        currency="USD",
     )
 
 
@@ -36,9 +37,10 @@ def test_replay_duplicate_events_do_not_corrupt_state() -> None:
         starting_cash=Decimal("50"),
         events=[buy, buy, sell, sell],
         mark_prices={"TEST": Decimal("7.5")},
+        currency="USD",
     )
     assert replayed.positions == {}
-    assert replayed.cash_gbp == Decimal("49.98")
+    assert replayed.cash == Decimal("49.98")
 
 
 def test_fees_and_slippage_reduce_nav_correctly() -> None:
@@ -47,5 +49,6 @@ def test_fees_and_slippage_reduce_nav_correctly() -> None:
         starting_cash=Decimal("50"),
         events=[buy],
         mark_prices={"TEST": Decimal("9.5")},
+        currency="USD",
     )
-    assert replayed.nav_gbp == Decimal("49.30")
+    assert replayed.nav == Decimal("49.30")
