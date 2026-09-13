@@ -79,6 +79,10 @@ jobs:
       - name: Run deterministic autonomous paper cycle
         run: python scripts/alpaca_m10_paper_runtime.py
 
+      - name: Update forward observation report
+        if: always()
+        run: python scripts/m10_observation_report.py
+
       - name: Upload durable M10 state
         if: always()
         uses: actions/upload-artifact@v4
@@ -87,6 +91,7 @@ jobs:
           path: |
             state/m10-ledger.jsonl
             state/m10-runtime-summary.json
+            state/m10-observation-report.json
             state/alpaca-request-ids.jsonl
           if-no-files-found: warn
           retention-days: 90
