@@ -8,6 +8,7 @@ from typing import Callable
 from project_fifty.domain.models import PortfolioState, Position
 from project_fifty.market_data.state import market_state_hash
 from project_fifty.strategies.contracts import MarketBar, StrategyContext, StrategyProvider
+from project_fifty.strategies.rebalance import EconomicRebalancePolicy, RebalancePlan
 
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
@@ -52,6 +53,8 @@ class BacktestResult:
     total_costs: Decimal
     trade_count: int
     points: tuple[BacktestPoint, ...]
+    total_turnover: Decimal = _ZERO
+    average_cash_weight: Decimal = _ZERO
 
 
 @dataclass(frozen=True)
@@ -75,13 +78,21 @@ class WalkForwardWindow:
 class BacktestEngine:
     """Next-bar-open replay with fractional positions and explicit costs.
 
-    Strategy decisions see bars only through `decision_time`. Target weights are executed at the
-    next benchmark bar open, preventing same-bar close look-ahead execution.
+    Strategy decisions see bars only through `decision_time`. When an economic rebalance policy is
+    supplied it is evaluated at the decision timestamp, then only approved rebalance instructions
+    may execute at the next bar open. This preserves no-lookahead behaviour while sharing the same
+    trade/no-trade rules with the future autonomous session.
     """
 
-    def __init__(self, strategy: StrategyProvider, config: BacktestConfig | None = None) -> None:
+    def __init__(
+        self,
+        strategy: StrategyProvider,
+        config: BacktestConfig | None = None,
+        rebalance_policy: EconomicRebalancePolicy | None = None,
+    ) -> None:
         self._strategy = strategy
         self._config = config or BacktestConfig()
+        self._rebalance_policy = rebalance_policy
 
     def run(
         self,
@@ -99,6 +110,8 @@ class BacktestEngine:
         positions: dict[str, Position] = {}
         points: list[BacktestPoint] = []
         total_costs = _ZERO
+        total_turnover = _ZERO
+        cash_weight_sum = _ZERO
         trade_count = 0
         peak_nav = self._config.starting_cash
         max_drawdown = _ZERO
@@ -144,6 +157,11 @@ class BacktestEngine:
                 benchmark_symbol=benchmark_symbol,
             )
             target = self._strategy.generate_target(context)
+            plan = (
+                self._rebalance_policy.plan(target=target, context=context)
+                if self._rebalance_policy is not None
+                else None
+            )
 
             execution_bars: dict[str, MarketBar] = {}
             for symbol, bars in history.items():
@@ -166,8 +184,10 @@ class BacktestEngine:
                 nav=pre_rebalance.nav,
                 target_weights=target.weights,
                 prices=open_prices,
+                plan=plan,
             )
             total_costs += costs
+            total_turnover += turnover
             trade_count += trades
 
             close_prices = {symbol: bar.close for symbol, bar in execution_bars.items()}
@@ -181,6 +201,8 @@ class BacktestEngine:
             if peak_nav > 0:
                 drawdown = end_state.nav / peak_nav - _ONE
                 max_drawdown = min(max_drawdown, drawdown)
+            if end_state.nav > _ZERO:
+                cash_weight_sum += end_state.cash / end_state.nav
             points.append(
                 BacktestPoint(
                     decision_time=decision_time,
@@ -197,6 +219,9 @@ class BacktestEngine:
             )
 
         ending_nav = points[-1].nav if points else self._config.starting_cash
+        average_cash_weight = (
+            cash_weight_sum / Decimal(len(points)) if points else _ONE
+        )
         return BacktestResult(
             starting_nav=self._config.starting_cash,
             ending_nav=ending_nav,
@@ -205,6 +230,8 @@ class BacktestEngine:
             total_costs=total_costs,
             trade_count=trade_count,
             points=tuple(points),
+            total_turnover=total_turnover,
+            average_cash_weight=average_cash_weight,
         )
 
     def _rebalance(
@@ -215,6 +242,7 @@ class BacktestEngine:
         nav: Decimal,
         target_weights: dict[str, Decimal],
         prices: dict[str, Decimal],
+        plan: RebalancePlan | None,
     ) -> tuple[Decimal, dict[str, Position], Decimal, Decimal, int]:
         updated = dict(positions)
         turnover = _ZERO
@@ -224,6 +252,8 @@ class BacktestEngine:
 
         # Sell/reduce first, mirroring Project Fifty's live proposal ordering.
         for symbol in symbols:
+            if not self._instruction_allows(symbol=symbol, plan=plan):
+                continue
             price = prices.get(symbol)
             position = updated.get(symbol)
             if price is None or position is None:
@@ -251,6 +281,8 @@ class BacktestEngine:
                 )
 
         for symbol in symbols:
+            if not self._instruction_allows(symbol=symbol, plan=plan):
+                continue
             price = prices.get(symbol)
             target_weight = target_weights.get(symbol, _ZERO)
             if price is None or target_weight <= _ZERO:
@@ -317,6 +349,13 @@ class BacktestEngine:
         )
 
     @staticmethod
+    def _instruction_allows(*, symbol: str, plan: RebalancePlan | None) -> bool:
+        if plan is None:
+            return True
+        instruction = plan.for_symbol(symbol)
+        return bool(instruction is not None and instruction.execute)
+
+    @staticmethod
     def _clamp_cash(value: Decimal) -> Decimal:
         if value >= _ZERO:
             return value
@@ -348,8 +387,8 @@ class BacktestEngine:
 class WalkForwardEvaluator:
     """Evaluate a strategy repeatedly on unseen test windows.
 
-    The strategy factory is called per window so state cannot leak between windows. Training bars
-    are supplied only as historical context; M4's deterministic baseline has nothing to fit yet.
+    The strategy factory is called per window so state cannot leak between windows. The optional
+    economic rebalance policy is stateless and is applied identically in every window.
     """
 
     def __init__(
@@ -358,10 +397,12 @@ class WalkForwardEvaluator:
         *,
         backtest_config: BacktestConfig | None = None,
         walk_forward_config: WalkForwardConfig | None = None,
+        rebalance_policy: EconomicRebalancePolicy | None = None,
     ) -> None:
         self._strategy_factory = strategy_factory
         self._backtest_config = backtest_config or BacktestConfig()
         self._walk_config = walk_forward_config or WalkForwardConfig()
+        self._rebalance_policy = rebalance_policy
 
     def evaluate(
         self,
@@ -382,7 +423,11 @@ class WalkForwardEvaluator:
                 symbol: tuple(bar for bar in bars if bar.timestamp <= test_end)
                 for symbol, bars in history.items()
             }
-            engine = BacktestEngine(self._strategy_factory(), self._backtest_config)
+            engine = BacktestEngine(
+                self._strategy_factory(),
+                self._backtest_config,
+                rebalance_policy=self._rebalance_policy,
+            )
             result = engine.run(
                 history=window_history,
                 benchmark_symbol=benchmark_symbol,

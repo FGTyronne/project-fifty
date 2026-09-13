@@ -6,13 +6,16 @@ from hashlib import sha256
 
 from project_fifty.domain.models import PortfolioState, TradeAction, TradeProposal
 from project_fifty.strategies.contracts import StrategyContext, TargetPortfolio
+from project_fifty.strategies.rebalance import EconomicRebalancePolicy, RebalancePlan
 
 
 class ProposalBuilder:
     """Convert strategy target weights into Project Fifty TradeProposal objects.
 
     The builder uses Project Fifty's internally authorised portfolio state. Broker cash,
-    equity and buying power are deliberately absent from this interface.
+    equity and buying power are deliberately absent from this interface. When an economic
+    rebalance policy is supplied, the same deterministic trade/no-trade plan can also be used by
+    historical replay so validation and future autonomous execution share the same economics.
     """
 
     def __init__(
@@ -21,6 +24,7 @@ class ProposalBuilder:
         min_order_notional: Decimal = Decimal("1.00"),
         estimated_fee: Decimal = Decimal("0"),
         estimated_slippage_rate: Decimal = Decimal("0.001"),
+        rebalance_policy: EconomicRebalancePolicy | None = None,
     ) -> None:
         if not min_order_notional.is_finite() or min_order_notional < 0:
             raise ValueError("min_order_notional must be finite and non-negative")
@@ -35,6 +39,7 @@ class ProposalBuilder:
         self._min_order_notional = min_order_notional
         self._estimated_fee = estimated_fee
         self._estimated_slippage_rate = estimated_slippage_rate
+        self._rebalance_policy = rebalance_policy
 
     def build(
         self,
@@ -42,13 +47,31 @@ class ProposalBuilder:
         target: TargetPortfolio,
         context: StrategyContext,
     ) -> list[TradeProposal]:
+        proposals, _ = self.build_with_plan(target=target, context=context)
+        return proposals
+
+    def build_with_plan(
+        self,
+        *,
+        target: TargetPortfolio,
+        context: StrategyContext,
+    ) -> tuple[list[TradeProposal], RebalancePlan | None]:
         self._validate_target_context(target, context)
         portfolio = context.portfolio
+        plan = (
+            self._rebalance_policy.plan(target=target, context=context)
+            if self._rebalance_policy is not None
+            else None
+        )
 
         proposals: list[TradeProposal] = []
         symbols = sorted(set(portfolio.positions) | set(target.weights))
 
         for symbol in symbols:
+            instruction = plan.for_symbol(symbol) if plan is not None else None
+            if instruction is not None and not instruction.execute:
+                continue
+
             price = context.reference_prices.get(symbol)
             timestamp = context.reference_price_timestamps.get(symbol)
             if price is None or timestamp is None:
@@ -62,6 +85,24 @@ class ProposalBuilder:
             target_weight = target.weights.get(symbol, Decimal("0"))
             target_notional = portfolio.nav * target_weight
             delta_notional = target_notional - current_notional
+            full_exit = current_quantity > 0 and target_weight == 0
+
+            # Full exits are risk-reducing and may bypass the economic/minimum-order no-trade band.
+            if full_exit:
+                proposals.append(
+                    self._proposal(
+                        target=target,
+                        symbol=symbol,
+                        action=TradeAction.EXIT,
+                        quantity=None,
+                        reduce_fraction=None,
+                        estimated_notional=current_notional,
+                        reference_price=price,
+                        reference_timestamp=timestamp,
+                        ordinal=len(proposals),
+                    )
+                )
+                continue
 
             if abs(delta_notional) < self._min_order_notional:
                 continue
@@ -84,22 +125,6 @@ class ProposalBuilder:
                 continue
 
             if current_quantity <= 0:
-                continue
-
-            if target_weight == 0:
-                proposals.append(
-                    self._proposal(
-                        target=target,
-                        symbol=symbol,
-                        action=TradeAction.EXIT,
-                        quantity=None,
-                        reduce_fraction=None,
-                        estimated_notional=current_notional,
-                        reference_price=price,
-                        reference_timestamp=timestamp,
-                        ordinal=len(proposals),
-                    )
-                )
                 continue
 
             reduction_notional = -delta_notional
@@ -126,7 +151,10 @@ class ProposalBuilder:
             TradeAction.BUY: 2,
             TradeAction.ADD: 2,
         }
-        return sorted(proposals, key=lambda proposal: (priority[proposal.action], proposal.symbol))
+        return (
+            sorted(proposals, key=lambda proposal: (priority[proposal.action], proposal.symbol)),
+            plan,
+        )
 
     def _proposal(
         self,
