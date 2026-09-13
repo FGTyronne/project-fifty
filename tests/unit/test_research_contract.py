@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 import pytest
@@ -32,7 +32,11 @@ def _context() -> StrategyContext:
     )
 
 
-def _evidence(symbol: str = "AAPL", state: str = "market-1") -> ResearchEvidence:
+def _evidence(
+    symbol: str = "AAPL",
+    state: str = "market-1",
+    observed_at: datetime | None = None,
+) -> ResearchEvidence:
     return ResearchEvidence(
         researcher="bear-researcher",
         symbol=symbol,
@@ -40,7 +44,7 @@ def _evidence(symbol: str = "AAPL", state: str = "market-1") -> ResearchEvidence
         score=Decimal("-0.4"),
         thesis="Recent acceleration increases reversal risk.",
         invalidation="Trend persists with improving breadth.",
-        observed_at=datetime(2026, 9, 14, 15, 0, tzinfo=UTC),
+        observed_at=observed_at or datetime(2026, 9, 14, 15, 0, tzinfo=UTC),
         market_state_hash=state,
         source_refs=("price-bars",),
     )
@@ -86,6 +90,24 @@ def test_research_council_rejects_stale_market_state() -> None:
     )
 
     with pytest.raises(ValueError, match="stale"):
+        validate_council_output(
+            candidates=("AAPL",),
+            context=context,
+            assessments=(assessment,),
+        )
+
+
+def test_research_council_rejects_future_evidence() -> None:
+    context = _context()
+    assessment = ResearchAssessment(
+        symbol="AAPL",
+        conviction_adjustment=Decimal("0.05"),
+        confidence=Decimal("0.7"),
+        market_state_hash="market-1",
+        evidence=(_evidence(observed_at=context.as_of + timedelta(minutes=1)),),
+    )
+
+    with pytest.raises(ValueError, match="future"):
         validate_council_output(
             candidates=("AAPL",),
             context=context,
