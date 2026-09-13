@@ -1,0 +1,39 @@
+name: alpaca-market-data-smoke
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  market-data:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
+      ALPACA_PAPER_API_SECRET: ${{ secrets.ALPACA_PAPER_API_SECRET }}
+      ALPACA_PAPER_BASE_URL: https://paper-api.alpaca.markets
+      ALPACA_DATA_BASE_URL: https://data.alpaca.markets
+      ALPACA_DATA_FEED: iex
+      ALPACA_PAPER_REQUEST_LOG: state/alpaca-request-ids.jsonl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Project Fifty
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+      - name: Read-only Alpaca IEX market-data smoke check
+        run: python scripts/alpaca_market_data_smoke.py
+      - name: Historical baseline and walk-forward validation
+        run: python scripts/alpaca_baseline_validation.py
+      - name: Upload validation record
+        uses: actions/upload-artifact@v4
+        with:
+          name: m4-baseline-validation
+          path: state/m4-baseline-validation.json
+          if-no-files-found: error
+          retention-days: 30
