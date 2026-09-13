@@ -10,6 +10,7 @@ from project_fifty.domain.models import (
     OrderIntent,
     OrderSide,
     OrderStatus,
+    PortfolioState,
     RejectionReason,
     RiskDecision,
     TradeAction,
@@ -63,7 +64,7 @@ class ExecutionKernel:
                         continue
                     machine.transition(OrderStatus(new_state))
 
-    def _authorized_portfolio(self):
+    def _authorized_portfolio(self) -> PortfolioState:
         mark_prices: dict[str, Decimal] = {}
         for report in self._reports:
             mark_prices[report.symbol] = report.fill_price
