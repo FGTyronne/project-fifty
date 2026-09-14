@@ -1,7 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-from project_fifty.domain.models import PortfolioState
+from project_fifty.domain.models import PortfolioState, Position
 from project_fifty.strategies.contracts import MarketBar, StrategyContext
 from project_fifty.strategies.m11 import (
     M11_BENCHMARK,
@@ -98,6 +98,7 @@ def test_scanner_ranks_stronger_candidate_first_deterministically() -> None:
     assert target.cash_weight == Decimal("0")
     assert target.evidence["selection"] == "ENTER_BEST_LONG"
     assert target.evidence["research_only"] == "true"
+    assert target.evidence["signal_family"] in {"momentum", "breakout"}
 
 
 def test_scanner_rejects_illiquid_candidate() -> None:
@@ -159,3 +160,54 @@ def test_stricter_economic_gate_can_force_cash() -> None:
 
     assert target.weights == {}
     assert target.cash_weight == Decimal("1")
+
+
+def test_adaptive_engine_can_choose_pullback_mean_reversion() -> None:
+    family, edge = M11OpportunityStrategy._best_signal_family(
+        short=Decimal("-0.012"),
+        medium=Decimal("0.030"),
+        relative=Decimal("0.020"),
+        breakout=Decimal("-0.010"),
+        benchmark_medium=Decimal("0.010"),
+    )
+
+    assert family == "pullback_mean_reversion"
+    assert edge > 0
+
+
+def test_adaptive_engine_can_choose_defensive_relative_strength() -> None:
+    family, edge = M11OpportunityStrategy._best_signal_family(
+        short=Decimal("0.002"),
+        medium=Decimal("0.018"),
+        relative=Decimal("0.030"),
+        breakout=Decimal("-0.005"),
+        benchmark_medium=Decimal("-0.012"),
+    )
+
+    assert family == "defensive_relative_strength"
+    assert edge > 0
+
+
+def test_rotation_buffer_can_keep_viable_incumbent_instead_of_churning() -> None:
+    config = M11ScannerConfig(rotation_buffer_bps=Decimal("10000"))
+    strategy = M11OpportunityStrategy(symbols=("AAPL", "MSFT"), config=config)
+    base = _context(aapl_growth=Decimal("0.004"), msft_growth=Decimal("0.0035"))
+    portfolio = PortfolioState(
+        cash=Decimal("27.6725"),
+        positions={
+            "MSFT": Position(
+                symbol="MSFT",
+                quantity=Decimal("0.1"),
+                average_price=Decimal("400"),
+            )
+        },
+        nav=Decimal("67.6725"),
+        currency="USD",
+        as_of=base.as_of,
+    )
+    context = base.model_copy(update={"portfolio": portfolio})
+
+    target = strategy.generate_target(context)
+
+    assert target.weights == {"MSFT": Decimal("1")}
+    assert target.evidence["selection"] == "HOLD_INCUMBENT_ROTATION_BUFFER"
