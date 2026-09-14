@@ -316,7 +316,10 @@ class M11OpportunityStrategy:
     @staticmethod
     def _average_absolute_return(bars: tuple[MarketBar, ...], window: int) -> Decimal:
         recent = bars[-(window + 1) :]
-        moves = [abs(recent[index].close / recent[index - 1].close - _ONE) for index in range(1, len(recent))]
+        moves = [
+            abs(recent[index].close / recent[index - 1].close - _ONE)
+            for index in range(1, len(recent))
+        ]
         return sum(moves, start=_ZERO) / Decimal(len(moves))
 
     @staticmethod
