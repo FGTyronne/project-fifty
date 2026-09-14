@@ -44,9 +44,16 @@ class FakeHandler:
 
 
 class FakeMarketData:
-    def __init__(self, now: datetime, *, stale_quotes: bool = False) -> None:
+    def __init__(
+        self,
+        now: datetime,
+        *,
+        stale_quotes: bool = False,
+        quote_offset_seconds: int = -10,
+    ) -> None:
         self.now = now
         self.stale_quotes = stale_quotes
+        self.quote_offset_seconds = quote_offset_seconds
         self.bar_calls = 0
         self.last_start: datetime | None = None
         start = now - timedelta(minutes=5 * 72)
@@ -82,7 +89,7 @@ class FakeMarketData:
         return {symbol: self.history[symbol] for symbol in symbols}
 
     def get_latest_quotes(self, symbols: tuple[str, ...]) -> dict[str, MarketQuote]:
-        quote_time = self.now - timedelta(seconds=10)
+        quote_time = self.now + timedelta(seconds=self.quote_offset_seconds)
         if self.stale_quotes:
             quote_time = self.now - timedelta(minutes=10)
         prices = {"AAPL": Decimal("100"), "SPY": Decimal("500")}
@@ -195,6 +202,43 @@ def test_stale_quotes_skip_entire_cycle(tmp_path: Path) -> None:
     result = runner.run_cycle(now=now)
 
     assert result.skipped_reason == "stale_quote"
+    assert handler.proposals == []
+
+
+def test_small_positive_quote_skew_is_tolerated(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 14, 15, 0, tzinfo=UTC)
+    handler = FakeHandler()
+    runner = _runner(
+        now=now,
+        ledger_path=tmp_path / "ledger.jsonl",
+        market_data=FakeMarketData(now, quote_offset_seconds=5),
+        clock=FakeClock(True),
+        handler=handler,
+        config=SessionConfig(poll_seconds=1, future_quote_tolerance_seconds=30),
+    )
+
+    result = runner.run_cycle(now=now)
+
+    assert result.skipped_reason is None
+    assert result.proposal_count == 1
+    assert len(handler.proposals) == 1
+
+
+def test_material_future_quote_still_fails_closed(tmp_path: Path) -> None:
+    now = datetime(2026, 9, 14, 15, 0, tzinfo=UTC)
+    handler = FakeHandler()
+    runner = _runner(
+        now=now,
+        ledger_path=tmp_path / "ledger.jsonl",
+        market_data=FakeMarketData(now, quote_offset_seconds=31),
+        clock=FakeClock(True),
+        handler=handler,
+        config=SessionConfig(poll_seconds=1, future_quote_tolerance_seconds=30),
+    )
+
+    result = runner.run_cycle(now=now)
+
+    assert result.skipped_reason == "future_quote"
     assert handler.proposals == []
 
 
