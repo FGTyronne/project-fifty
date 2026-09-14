@@ -3,8 +3,10 @@ name: alpaca-m10-paper
 on:
   workflow_dispatch:
   schedule:
-    # Poll throughout the US cash session. Alpaca's market clock remains the
-    # authoritative gate, so holidays and daylight-saving transitions fail closed.
+    # GitHub Actions cannot schedule more frequently than every 5 minutes.
+    # Start one 15-minute watcher block and poll internally every 3 minutes.
+    # Alpaca's market clock remains the authoritative gate, so holidays and
+    # daylight-saving transitions fail closed.
     - cron: '*/15 13-21 * * 1-5'
   push:
     branches:
@@ -83,12 +85,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Run deterministic autonomous paper cycle
-        run: python scripts/alpaca_m10_paper_runtime.py
-
-      - name: Update forward observation report
-        if: always()
-        run: python scripts/m10_observation_report.py
+      - name: Run three-minute autonomous market watch
+        shell: bash
+        run: |
+          set -euo pipefail
+          for cycle in 1 2 3 4 5; do
+            echo "M10 market-watch cycle ${cycle}/5"
+            python scripts/alpaca_m10_paper_runtime.py
+            python scripts/m10_observation_report.py
+            if [[ "${cycle}" -lt 5 ]]; then
+              sleep 180
+            fi
+          done
 
       - name: Upload durable M10 state
         if: always()
