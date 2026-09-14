@@ -3,9 +3,9 @@ name: alpaca-m10-paper
 on:
   workflow_dispatch:
   schedule:
-    - cron: '5 15 * * 1-5'
-    - cron: '20 15 * * 1-5'
-    - cron: '35 15 * * 1-5'
+    # Poll throughout the US cash session. Alpaca's market clock remains the
+    # authoritative gate, so holidays and daylight-saving transitions fail closed.
+    - cron: '*/15 13-21 * * 1-5'
   push:
     branches:
       - main
