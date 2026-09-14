@@ -45,14 +45,7 @@ class SingleMarketTrendStrategy:
         self.config = config or SingleMarketTrendConfig()
 
     def generate_target(self, context: StrategyContext) -> TargetPortfolio:
-        symbol = self.config.symbol
-        if context.benchmark_symbol != symbol:
-            raise ValueError("M9 requires SPY as the benchmark and sole risk instrument")
-        unexpected = set(context.portfolio.positions) - {symbol}
-        if unexpected:
-            raise ValueError("M9 encountered a non-SPY position")
-
-        bars = context.history.get(symbol, ())
+        symbol, bars = self._validated_inputs(context)
         minimum_history = max(self.config.trend_sma_days, self.config.momentum_days + 1)
         if len(bars) < minimum_history:
             return self._preserve(context, reason="INSUFFICIENT_HISTORY")
@@ -60,6 +53,52 @@ class SingleMarketTrendStrategy:
         if len(bars) % self.config.rebalance_every_bars != 0:
             return self._preserve(context, reason="NOT_SCHEDULED")
 
+        return self._evaluate_regime(context=context, symbol=symbol, bars=bars, bootstrap=False)
+
+    def generate_inception_target(self, context: StrategyContext) -> TargetPortfolio:
+        """Evaluate the current M9 regime once at experiment inception.
+
+        This is deliberately separate from ``generate_target`` so the frozen 21-bar M9 cadence and
+        all historical validation remain unchanged. M10 may call this exactly once while the
+        experiment is still flat and has never established exposure. The same 200-day trend and
+        126-day momentum rules are used; only the cadence gate is bypassed for that one bootstrap
+        decision.
+        """
+
+        symbol, bars = self._validated_inputs(context)
+        minimum_history = max(self.config.trend_sma_days, self.config.momentum_days + 1)
+        if len(bars) < minimum_history:
+            return self._preserve(
+                context,
+                reason="INSUFFICIENT_HISTORY",
+                evidence={
+                    "bootstrap": "true",
+                    "cadence_override": "inception_only",
+                },
+            )
+
+        return self._evaluate_regime(context=context, symbol=symbol, bars=bars, bootstrap=True)
+
+    def _validated_inputs(
+        self,
+        context: StrategyContext,
+    ) -> tuple[str, tuple[MarketBar, ...]]:
+        symbol = self.config.symbol
+        if context.benchmark_symbol != symbol:
+            raise ValueError("M9 requires SPY as the benchmark and sole risk instrument")
+        unexpected = set(context.portfolio.positions) - {symbol}
+        if unexpected:
+            raise ValueError("M9 encountered a non-SPY position")
+        return symbol, context.history.get(symbol, ())
+
+    def _evaluate_regime(
+        self,
+        *,
+        context: StrategyContext,
+        symbol: str,
+        bars: tuple[MarketBar, ...],
+        bootstrap: bool,
+    ) -> TargetPortfolio:
         close = bars[-1].close
         sma = self._sma(bars, self.config.trend_sma_days)
         momentum = self._momentum(bars)
@@ -73,6 +112,9 @@ class SingleMarketTrendStrategy:
             "raw_risk_state": "RISK_ON" if risk_on else "RISK_OFF",
             "rebalance_every_bars": str(self.config.rebalance_every_bars),
         }
+        if bootstrap:
+            evidence["bootstrap"] = "true"
+            evidence["cadence_override"] = "inception_only"
 
         if risk_on:
             if symbol in context.portfolio.positions:

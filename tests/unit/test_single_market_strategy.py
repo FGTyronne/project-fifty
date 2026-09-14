@@ -124,6 +124,36 @@ def test_scheduled_risk_off_exits_spy_to_cash() -> None:
     assert plan.executable_symbols == frozenset({"SPY"})
 
 
+def test_inception_bootstrap_evaluates_risk_on_even_when_bar_is_not_scheduled() -> None:
+    context = _context(count=211)
+    strategy = SingleMarketTrendStrategy()
+
+    normal_target = strategy.generate_target(context)
+    bootstrap_target = strategy.generate_inception_target(context)
+
+    assert normal_target.weights == {}
+    assert normal_target.evidence["selection"] == "NOT_SCHEDULED"
+    assert bootstrap_target.weights == {"SPY": Decimal("1")}
+    assert bootstrap_target.cash_weight == Decimal("0")
+    assert bootstrap_target.evidence["selection"] == "ENTER_RISK_ON"
+    assert bootstrap_target.evidence["raw_risk_state"] == "RISK_ON"
+    assert bootstrap_target.evidence["bootstrap"] == "true"
+    assert bootstrap_target.evidence["cadence_override"] == "inception_only"
+    assert bootstrap_target.evidence["rebalance_every_bars"] == "21"
+
+
+def test_inception_bootstrap_can_legitimately_choose_cash() -> None:
+    target = SingleMarketTrendStrategy().generate_inception_target(
+        _context(count=211, growth=Decimal("-0.001"))
+    )
+
+    assert target.weights == {}
+    assert target.cash_weight == Decimal("1")
+    assert target.evidence["selection"] == "HOLD_CASH"
+    assert target.evidence["raw_risk_state"] == "RISK_OFF"
+    assert target.evidence["bootstrap"] == "true"
+
+
 def test_m9_retains_m8_economic_filter() -> None:
     policy = m9_rebalance_policy()
 

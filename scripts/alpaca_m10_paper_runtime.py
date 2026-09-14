@@ -3,14 +3,14 @@ from __future__ import annotations
 import json
 import os
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from project_fifty.brokers.alpaca.broker import AlpacaPaperBroker
 from project_fifty.brokers.alpaca.config import AlpacaPaperConfig
 from project_fifty.config.settings import Settings
 from project_fifty.control.persistence import LedgerBackedControlState
-from project_fifty.domain.models import ExperimentMode
+from project_fifty.domain.models import ExperimentMode, LedgerEvent
 from project_fifty.execution.kernel import ExecutionKernel
 from project_fifty.ledger.local import LocalAppendOnlyLedger
 from project_fifty.market_data.alpaca import AlpacaMarketDataConfig
@@ -23,6 +23,7 @@ from project_fifty.session.runner import (
     SessionCycleResult,
 )
 from project_fifty.session.runtime_state import expected_position_quantities, pending_orders
+from project_fifty.strategies.contracts import StrategyContext, TargetPortfolio
 from project_fifty.strategies.m9 import M9_TIMEFRAME, m9_rebalance_policy
 from project_fifty.strategies.proposal_builder import ProposalBuilder
 from project_fifty.strategies.single_market import SingleMarketTrendStrategy
@@ -32,6 +33,42 @@ OWNER_LIFETIME_GBP = Decimal("50.00")
 HISTORY_START = datetime(2020, 1, 2, tzinfo=UTC)
 SYMBOL = "SPY"
 MAX_M10_ORDER_NOTIONAL = Decimal("250")
+
+
+class _InceptionBootstrapStrategy:
+    """One-shot M10 adapter that evaluates the frozen M9 regime immediately."""
+
+    strategy_id = SingleMarketTrendStrategy.strategy_id
+    strategy_version = SingleMarketTrendStrategy.strategy_version
+
+    def __init__(self, delegate: SingleMarketTrendStrategy) -> None:
+        self._delegate = delegate
+
+    def generate_target(self, context: StrategyContext) -> TargetPortfolio:
+        return self._delegate.generate_inception_target(context)
+
+
+class _InceptionLedgerView:
+    """Expose durable state while ignoring prior cycle markers for one bootstrap evaluation.
+
+    M10 already recorded a normal NOT_SCHEDULED cycle before inception semantics were introduced.
+    The bootstrap must therefore be allowed to evaluate that same completed daily bar exactly once.
+    All execution reports and every other durable event remain visible, and all new events are
+    appended to the real ledger.
+    """
+
+    def __init__(self, delegate: LocalAppendOnlyLedger) -> None:
+        self._delegate = delegate
+
+    def append(self, event_type: str, payload: dict[str, object]) -> LedgerEvent:
+        return self._delegate.append(event_type, payload)
+
+    def all_events(self) -> list[LedgerEvent]:
+        return [
+            event
+            for event in self._delegate.all_events()
+            if event.event_type != "strategy_cycle_completed"
+        ]
 
 
 def _validated_settings() -> Settings:
@@ -57,6 +94,30 @@ def _count_submissions(ledger: LocalAppendOnlyLedger) -> int:
         for event in ledger.all_events()
         if event.event_type == "broker_submission_attempt"
     )
+
+
+def _has_positive_fill(ledger: LocalAppendOnlyLedger) -> bool:
+    for event in ledger.all_events():
+        if event.event_type != "broker_execution_report":
+            continue
+        raw_quantity = event.payload.get("fill_quantity")
+        if raw_quantity is None:
+            continue
+        try:
+            if Decimal(str(raw_quantity)) > 0:
+                return True
+        except InvalidOperation as exc:
+            raise RuntimeError("invalid fill quantity in durable M10 ledger") from exc
+    return False
+
+
+def _inception_bootstrap_required(ledger: LocalAppendOnlyLedger) -> bool:
+    if any(
+        event.event_type == "m10_inception_bootstrap_completed"
+        for event in ledger.all_events()
+    ):
+        return False
+    return not _has_positive_fill(ledger)
 
 
 def _write_summary(
@@ -212,19 +273,37 @@ def main() -> None:
             print("Project Fifty M10: pending broker order; no new strategy action")
             return
 
+        base_strategy = SingleMarketTrendStrategy()
+        bootstrap_required = _inception_bootstrap_required(ledger)
+        strategy = (
+            _InceptionBootstrapStrategy(base_strategy) if bootstrap_required else base_strategy
+        )
+        runner_ledger = _InceptionLedgerView(ledger) if bootstrap_required else ledger
+        if bootstrap_required:
+            ledger.append(
+                "m10_inception_bootstrap_started",
+                {
+                    "as_of": now.isoformat(),
+                    "strategy_id": base_strategy.strategy_id,
+                    "strategy_version": base_strategy.strategy_version,
+                    "reason": "establish_initial_economic_state",
+                    "cadence_override": "inception_only",
+                },
+            )
+
         runner = AutonomousSessionRunner(
             settings=settings,
             universe=SingleInstrumentUniverse(SYMBOL),
             market_data=market_data,
             market_clock=broker,
-            strategy=SingleMarketTrendStrategy(),
+            strategy=strategy,
             proposal_builder=ProposalBuilder(
                 min_order_notional=Decimal("5.00"),
                 estimated_slippage_rate=Decimal("0.001"),
                 rebalance_policy=m9_rebalance_policy(),
             ),
             proposal_handler=kernel,
-            ledger=ledger,
+            ledger=runner_ledger,
             config=SessionConfig(
                 timeframe=M9_TIMEFRAME,
                 timeframe_seconds=86400,
@@ -234,6 +313,29 @@ def main() -> None:
             ),
         )
         result = runner.run_cycle(now=now)
+
+        if bootstrap_required and result.market_open and result.skipped_reason is None:
+            bootstrap_succeeded = result.rejected_count == 0 and result.suppressed_count == 0
+            ledger.append(
+                (
+                    "m10_inception_bootstrap_completed"
+                    if bootstrap_succeeded
+                    else "m10_inception_bootstrap_incomplete"
+                ),
+                {
+                    "as_of": now.isoformat(),
+                    "decision_bar_time": (
+                        result.decision_bar_time.isoformat()
+                        if result.decision_bar_time is not None
+                        else None
+                    ),
+                    "proposal_count": result.proposal_count,
+                    "approved_count": result.approved_count,
+                    "rejected_count": result.rejected_count,
+                    "suppressed_count": result.suppressed_count,
+                    "submissions_this_run": _count_submissions(ledger) - submissions_before,
+                },
+            )
 
     submissions_after = _count_submissions(ledger)
     ledger.append(
