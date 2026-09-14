@@ -127,7 +127,19 @@ def test_scanner_rejects_signal_that_does_not_clear_cost_buffer() -> None:
 
 def test_equal_candidates_use_symbol_as_stable_tie_breaker() -> None:
     strategy = M11OpportunityStrategy(symbols=("MSFT", "AAPL"))
-    context = _context(aapl_growth=Decimal("0.004"), msft_growth=Decimal("0.004"))
+    base = _context(aapl_growth=Decimal("0.004"), msft_growth=Decimal("0.004"))
+    shared = base.history["AAPL"]
+    spy = base.history["SPY"]
+    context = base.model_copy(
+        update={
+            "history": {"AAPL": shared, "MSFT": shared, "SPY": spy},
+            "reference_prices": {
+                "AAPL": shared[-1].close,
+                "MSFT": shared[-1].close,
+                "SPY": spy[-1].close,
+            },
+        }
+    )
 
     ranked = strategy.scan(context)
 
