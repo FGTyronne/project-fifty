@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -15,6 +15,7 @@ from project_fifty.session.observation import calculate_forward_metrics
 
 INTERNAL_STARTING_CASH = Decimal("67.6725")
 SYMBOL = "SPY"
+FUTURE_QUOTE_TOLERANCE_SECONDS = 30
 
 
 def _latest_completed_cycle(ledger: LocalAppendOnlyLedger) -> dict[str, object] | None:
@@ -60,9 +61,12 @@ def _append_snapshot_if_needed(
         quote = market_data.get_latest_quotes((SYMBOL,)).get(SYMBOL)
     if quote is None or not quote.is_actionable:
         raise RuntimeError("cannot mark M10 observation without an actionable SPY quote")
-    if quote.timestamp > now:
-        raise RuntimeError("SPY observation quote is from the future")
-    if (now - quote.timestamp).total_seconds() > settings.max_stale_seconds:
+
+    future_cutoff = now + timedelta(seconds=FUTURE_QUOTE_TOLERANCE_SECONDS)
+    if quote.timestamp > future_cutoff:
+        raise RuntimeError("SPY observation quote is materially from the future")
+    observation_time = max(now, quote.timestamp)
+    if (observation_time - quote.timestamp).total_seconds() > settings.max_stale_seconds:
         raise RuntimeError("SPY observation quote is stale")
 
     portfolio = PortfolioReconciler.replay_events(
@@ -74,7 +78,7 @@ def _append_snapshot_if_needed(
     ledger.append(
         "forward_observation_snapshot",
         {
-            "as_of": now.isoformat(),
+            "as_of": observation_time.isoformat(),
             "decision_bar_time": raw_bar,
             "nav": str(portfolio.nav),
             "cash": str(portfolio.cash),
