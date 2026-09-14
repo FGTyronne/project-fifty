@@ -6,7 +6,7 @@ from decimal import Decimal
 from project_fifty.strategies.contracts import MarketBar, StrategyContext, TargetPortfolio
 
 M11_STRATEGY_ID = "multi-asset-opportunity-scanner"
-M11_STRATEGY_VERSION = "0.1.0-research"
+M11_STRATEGY_VERSION = "0.2.0-research"
 M11_UNIVERSE_VERSION = "2026-09-14-v1"
 M11_BENCHMARK = "SPY"
 
@@ -92,10 +92,11 @@ _TEN_THOUSAND = Decimal("10000")
 
 @dataclass(frozen=True)
 class M11ScannerConfig:
-    """Predeclared first-pass M11 research parameters.
+    """Predeclared M11 adaptive research parameters.
 
-    These parameters are intentionally simple and deterministic. They are a research starting point,
-    not a profitability claim and not paper-trading authority.
+    M11 is intentionally allowed to choose among multiple signal families rather than being tied to
+    one SPY/cash rule. The strategy remains deterministic and research-only until historical and
+    paper gates are passed.
     """
 
     short_momentum_bars: int = 3
@@ -106,6 +107,7 @@ class M11ScannerConfig:
     minimum_average_dollar_volume: Decimal = Decimal("1000000")
     modeled_round_trip_friction_bps: Decimal = Decimal("20")
     minimum_edge_buffer_bps: Decimal = Decimal("10")
+    rotation_buffer_bps: Decimal = Decimal("12")
     minimum_score: Decimal = Decimal("0.75")
     volatility_floor: Decimal = Decimal("0.0005")
 
@@ -123,6 +125,7 @@ class M11ScannerConfig:
             self.minimum_average_dollar_volume,
             self.modeled_round_trip_friction_bps,
             self.minimum_edge_buffer_bps,
+            self.rotation_buffer_bps,
             self.minimum_score,
             self.volatility_floor,
         )
@@ -135,6 +138,7 @@ class M11ScannerConfig:
 @dataclass(frozen=True)
 class OpportunityCandidate:
     symbol: str
+    signal_family: str
     score: Decimal
     gross_edge_bps: Decimal
     estimated_net_edge_bps: Decimal
@@ -148,6 +152,7 @@ class OpportunityCandidate:
     def evidence(self) -> dict[str, str]:
         return {
             "symbol": self.symbol,
+            "signal_family": self.signal_family,
             "score": str(self.score),
             "gross_edge_bps": str(self.gross_edge_bps),
             "estimated_net_edge_bps": str(self.estimated_net_edge_bps),
@@ -161,11 +166,12 @@ class OpportunityCandidate:
 
 
 class M11OpportunityStrategy:
-    """Research-only cross-sectional opportunity scanner.
+    """Research-only adaptive cross-sectional opportunity scanner.
 
-    The strategy selects at most one long candidate or cash. It has no broker credentials and cannot
-    bypass Project Fifty's proposal/risk/execution boundary. M11 is intentionally not wired into the
-    M10 paper workflow.
+    The engine scans many permitted assets and lets the strongest qualifying signal family win. It
+    can rotate between momentum, breakout, pullback mean-reversion and defensive relative-strength
+    opportunities, or return cash. It has no broker credentials and cannot bypass Project Fifty's
+    proposal, risk and execution boundary.
     """
 
     strategy_id = M11_STRATEGY_ID
@@ -218,6 +224,7 @@ class M11OpportunityStrategy:
                 self.config.modeled_round_trip_friction_bps
             ),
             "minimum_edge_buffer_bps": str(self.config.minimum_edge_buffer_bps),
+            "rotation_buffer_bps": str(self.config.rotation_buffer_bps),
             "research_only": "true",
         }
         if not ranked:
@@ -233,18 +240,47 @@ class M11OpportunityStrategy:
                 evidence={**common, "selection": "CASH_NO_ECONOMIC_OPPORTUNITY"},
             )
 
-        best = ranked[0]
+        selected, selection = self._select_with_incumbency(ranked, context)
         return TargetPortfolio(
             as_of=context.as_of,
             currency=context.currency,
-            weights={best.symbol: _ONE},
+            weights={selected.symbol: _ONE},
             cash_weight=_ZERO,
             strategy_id=self.strategy_id,
             strategy_version=self.strategy_version,
             confidence=Decimal("0.50"),
             market_state_hash=context.market_state_hash,
-            evidence={**common, "selection": "ENTER_BEST_LONG", **best.evidence()},
+            evidence={**common, "selection": selection, **selected.evidence()},
         )
+
+    def _select_with_incumbency(
+        self,
+        ranked: tuple[OpportunityCandidate, ...],
+        context: StrategyContext,
+    ) -> tuple[OpportunityCandidate, str]:
+        best = ranked[0]
+        held_symbols = tuple(
+            sorted(
+                symbol
+                for symbol, position in context.portfolio.positions.items()
+                if position.quantity > 0
+            )
+        )
+        if len(held_symbols) != 1:
+            return best, "ENTER_BEST_LONG"
+
+        incumbent_symbol = held_symbols[0]
+        incumbent = next(
+            (candidate for candidate in ranked if candidate.symbol == incumbent_symbol),
+            None,
+        )
+        if incumbent is None or incumbent.symbol == best.symbol:
+            return best, "HOLD_BEST_LONG" if incumbent is not None else "ENTER_BEST_LONG"
+
+        challenger_threshold = incumbent.estimated_net_edge_bps + self.config.rotation_buffer_bps
+        if best.estimated_net_edge_bps < challenger_threshold:
+            return incumbent, "HOLD_INCUMBENT_ROTATION_BUFFER"
+        return best, "ROTATE_TO_BETTER_LONG"
 
     def _candidate(
         self,
@@ -263,14 +299,12 @@ class M11OpportunityStrategy:
         if dollar_volume < self.config.minimum_average_dollar_volume:
             return None
 
-        # Weighted gross directional opportunity. Breakout contributes only when price has actually
-        # exceeded its prior range; negative breakout values do not create a synthetic long edge.
-        positive_breakout = max(breakout, _ZERO)
-        gross_edge = (
-            Decimal("0.35") * short
-            + Decimal("0.35") * medium
-            + Decimal("0.20") * relative
-            + Decimal("0.10") * positive_breakout
+        signal_family, gross_edge = self._best_signal_family(
+            short=short,
+            medium=medium,
+            relative=relative,
+            breakout=breakout,
+            benchmark_medium=benchmark_medium,
         )
         gross_edge_bps = gross_edge * _TEN_THOUSAND
         required_bps = (
@@ -286,6 +320,7 @@ class M11OpportunityStrategy:
 
         return OpportunityCandidate(
             symbol=symbol,
+            signal_family=signal_family,
             score=score,
             gross_edge_bps=gross_edge_bps,
             estimated_net_edge_bps=(
@@ -298,6 +333,58 @@ class M11OpportunityStrategy:
             breakout_return=breakout,
             realised_volatility=volatility,
         )
+
+    @staticmethod
+    def _best_signal_family(
+        *,
+        short: Decimal,
+        medium: Decimal,
+        relative: Decimal,
+        breakout: Decimal,
+        benchmark_medium: Decimal,
+    ) -> tuple[str, Decimal]:
+        positive_short = max(short, _ZERO)
+        positive_medium = max(medium, _ZERO)
+        positive_relative = max(relative, _ZERO)
+        positive_breakout = max(breakout, _ZERO)
+
+        families: list[tuple[str, Decimal]] = [
+            (
+                "momentum",
+                Decimal("0.35") * short
+                + Decimal("0.35") * medium
+                + Decimal("0.20") * relative
+                + Decimal("0.10") * positive_breakout,
+            ),
+            (
+                "breakout",
+                Decimal("0.50") * positive_breakout
+                + Decimal("0.30") * positive_short
+                + Decimal("0.20") * positive_relative,
+            ),
+        ]
+
+        if medium > 0 and short < 0:
+            families.append(
+                (
+                    "pullback_mean_reversion",
+                    Decimal("0.55") * (-short)
+                    + Decimal("0.25") * positive_medium
+                    + Decimal("0.20") * positive_relative,
+                )
+            )
+
+        if benchmark_medium < 0 and medium > 0:
+            families.append(
+                (
+                    "defensive_relative_strength",
+                    Decimal("0.45") * positive_medium
+                    + Decimal("0.45") * positive_relative
+                    + Decimal("0.10") * positive_short,
+                )
+            )
+
+        return sorted(families, key=lambda item: (-item[1], item[0]))[0]
 
     def _enough_history(self, bars: tuple[MarketBar, ...]) -> bool:
         required = max(
