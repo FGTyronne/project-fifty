@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '5 15 * * 1-5'
+    - cron: '20 15 * * 1-5'
+    - cron: '35 15 * * 1-5'
+  push:
+    branches:
+      - main
+    paths:
+      - .github/m10-paper.trigger
 
 concurrency:
   group: m10-paper-runtime
