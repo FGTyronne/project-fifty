@@ -49,10 +49,13 @@ class SessionConfig:
     history_days: int = 14
     history_start: datetime | None = None
     poll_seconds: int = 60
+    future_quote_tolerance_seconds: int = 30
 
     def __post_init__(self) -> None:
         if min(self.timeframe_seconds, self.history_days, self.poll_seconds) <= 0:
             raise ValueError("session timing values must be positive")
+        if self.future_quote_tolerance_seconds < 0:
+            raise ValueError("future_quote_tolerance_seconds must be non-negative")
         if self.history_start is not None and self.history_start.tzinfo is None:
             raise ValueError("history_start must be timezone-aware")
 
@@ -145,7 +148,8 @@ class AutonomousSessionRunner:
         missing_quotes = set(symbols) - set(quotes)
         if missing_quotes:
             return self._skip(current, "missing_quote")
-        if any(quote.timestamp > current for quote in quotes.values()):
+        future_cutoff = current + timedelta(seconds=self._config.future_quote_tolerance_seconds)
+        if any(quote.timestamp > future_cutoff for quote in quotes.values()):
             return self._skip(current, "future_quote")
         if any(
             (current - quote.timestamp).total_seconds() > self._settings.max_stale_seconds
