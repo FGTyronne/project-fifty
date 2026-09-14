@@ -151,8 +151,9 @@ class AutonomousSessionRunner:
         future_cutoff = current + timedelta(seconds=self._config.future_quote_tolerance_seconds)
         if any(quote.timestamp > future_cutoff for quote in quotes.values()):
             return self._skip(current, "future_quote")
+        observation_time = max(current, *(quote.timestamp for quote in quotes.values()))
         if any(
-            (current - quote.timestamp).total_seconds() > self._settings.max_stale_seconds
+            (observation_time - quote.timestamp).total_seconds() > self._settings.max_stale_seconds
             for quote in quotes.values()
         ):
             return self._skip(current, "stale_quote")
@@ -163,7 +164,7 @@ class AutonomousSessionRunner:
         portfolio = self._authorized_portfolio(mark_prices)
         state_hash = market_state_hash(history=history, quotes=quotes)
         context = StrategyContext(
-            as_of=current,
+            as_of=observation_time,
             currency=self._settings.account_currency,
             portfolio=portfolio,
             reference_prices=mark_prices,
@@ -210,7 +211,7 @@ class AutonomousSessionRunner:
         self._ledger.append(
             "strategy_cycle_completed",
             {
-                "as_of": current.isoformat(),
+                "as_of": observation_time.isoformat(),
                 "decision_bar_time": decision_bar_time.isoformat(),
                 "market_state_hash": state_hash,
                 "strategy_id": target.strategy_id,
