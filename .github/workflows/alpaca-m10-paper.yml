@@ -58,8 +58,7 @@ jobs:
           mkdir -p state
           previous_run="$(
             gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/alpaca-m10-paper.yml/runs?per_page=50" \
-              --jq '.workflow_runs[] | select(.head_branch == "main" and .status == "completed" and .conclusion == "success") | .id' \
-              | head -n 1
+              --jq '[.workflow_runs[] | select(.head_branch == "main" and .status == "completed" and .conclusion == "success")] | first | .id // empty'
           )"
           if [[ -z "${previous_run}" ]]; then
             echo "No previous successful main-branch M10 runtime exists; starting genesis ledger."
@@ -68,8 +67,7 @@ jobs:
 
           artifact_id="$(
             gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${previous_run}/artifacts?per_page=100" \
-              --jq '.artifacts[] | select(.name == "m10-runtime-state" and .expired == false) | .id' \
-              | head -n 1
+              --jq '[.artifacts[] | select(.name == "m10-runtime-state" and .expired == false)] | first | .id // empty'
           )"
           if [[ -z "${artifact_id}" ]]; then
             echo "Previous successful M10 run exists but its durable state artifact is unavailable. Failing closed."
