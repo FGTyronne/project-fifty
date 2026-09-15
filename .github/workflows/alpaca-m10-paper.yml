@@ -42,6 +42,7 @@ jobs:
       PROJECT_FIFTY_MAX_ORDER_NOTIONAL: '250'
       PROJECT_FIFTY_PERMITTED_SYMBOLS: SPY
       PROJECT_FIFTY_MAX_STALE_SECONDS: '120'
+      PROJECT_FIFTY_M10_RETIRE_TO_CASH: 'true'
       PROJECT_FIFTY_KILL_SWITCH: ${{ vars.PROJECT_FIFTY_KILL_SWITCH || 'false' }}
     steps:
       - uses: actions/checkout@v4
@@ -57,11 +58,11 @@ jobs:
           mkdir -p state
           previous_run="$(
             gh api "/repos/${GITHUB_REPOSITORY}/actions/workflows/alpaca-m10-paper.yml/runs?per_page=50" \
-              --jq '.workflow_runs[] | select(.head_branch == "main" and .status == "completed") | .id' \
+              --jq '.workflow_runs[] | select(.head_branch == "main" and .status == "completed" and .conclusion == "success") | .id' \
               | head -n 1
           )"
           if [[ -z "${previous_run}" ]]; then
-            echo "No previous completed main-branch M10 runtime exists; starting genesis ledger."
+            echo "No previous successful main-branch M10 runtime exists; starting genesis ledger."
             exit 0
           fi
 
@@ -71,7 +72,7 @@ jobs:
               | head -n 1
           )"
           if [[ -z "${artifact_id}" ]]; then
-            echo "Previous M10 run exists but its durable state artifact is unavailable. Failing closed."
+            echo "Previous successful M10 run exists but its durable state artifact is unavailable. Failing closed."
             exit 1
           fi
 
@@ -90,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           for cycle in 1 2 3 4 5; do
-            echo "M10 market-watch cycle ${cycle}/5"
+            echo "M10 retirement/market-watch cycle ${cycle}/5"
             python scripts/alpaca_m10_paper_runtime.py
             python scripts/m10_observation_report.py
             if [[ "${cycle}" -lt 5 ]]; then
