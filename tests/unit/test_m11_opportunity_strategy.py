@@ -77,6 +77,31 @@ def _context(
     )
 
 
+def _with_position(
+    context: StrategyContext,
+    *,
+    symbol: str,
+    average_price: Decimal,
+    quantity: Decimal = Decimal("0.1"),
+) -> StrategyContext:
+    marked_value = quantity * context.reference_prices[symbol]
+    cash = max(Decimal("0"), context.portfolio.nav - marked_value)
+    portfolio = PortfolioState(
+        cash=cash,
+        positions={
+            symbol: Position(
+                symbol=symbol,
+                quantity=quantity,
+                average_price=average_price,
+            )
+        },
+        nav=context.portfolio.nav,
+        currency="USD",
+        as_of=context.as_of,
+    )
+    return context.model_copy(update={"portfolio": portfolio})
+
+
 def test_m11_research_universe_is_versioned_and_excludes_benchmark() -> None:
     assert M11_UNIVERSE_VERSION == "2026-09-14-v1"
     assert 50 <= len(M11_RESEARCH_SYMBOLS) <= 200
@@ -98,6 +123,7 @@ def test_scanner_ranks_stronger_candidate_first_deterministically() -> None:
     assert target.cash_weight == Decimal("0")
     assert target.evidence["selection"] == "ENTER_BEST_LONG"
     assert target.evidence["research_only"] == "true"
+    assert target.evidence["day_trade_only"] == "true"
     assert target.evidence["signal_family"] in {"momentum", "breakout"}
 
 
@@ -192,22 +218,101 @@ def test_rotation_buffer_can_keep_viable_incumbent_instead_of_churning() -> None
     config = M11ScannerConfig(rotation_buffer_bps=Decimal("10000"))
     strategy = M11OpportunityStrategy(symbols=("AAPL", "MSFT"), config=config)
     base = _context(aapl_growth=Decimal("0.004"), msft_growth=Decimal("0.0035"))
-    portfolio = PortfolioState(
-        cash=Decimal("27.6725"),
-        positions={
-            "MSFT": Position(
-                symbol="MSFT",
-                quantity=Decimal("0.1"),
-                average_price=Decimal("400"),
-            )
-        },
-        nav=Decimal("67.6725"),
-        currency="USD",
-        as_of=base.as_of,
+    context = _with_position(
+        base,
+        symbol="MSFT",
+        average_price=base.reference_prices["MSFT"],
     )
-    context = base.model_copy(update={"portfolio": portfolio})
 
     target = strategy.generate_target(context)
 
     assert target.weights == {"MSFT": Decimal("1")}
     assert target.evidence["selection"] == "HOLD_INCUMBENT_ROTATION_BUFFER"
+
+
+def test_stop_loss_forces_intraday_exit() -> None:
+    strategy = M11OpportunityStrategy(symbols=("AAPL", "MSFT"))
+    base = _context(aapl_growth=Decimal("0.002"), msft_growth=Decimal("0.001"))
+    current = base.reference_prices["AAPL"]
+    context = _with_position(
+        base,
+        symbol="AAPL",
+        average_price=current / Decimal("0.99"),
+    )
+
+    target = strategy.generate_target(context)
+
+    assert target.weights == {}
+    assert target.cash_weight == Decimal("1")
+    assert target.evidence["selection"] == "STOP_LOSS_EXIT"
+
+
+def test_take_profit_forces_intraday_exit() -> None:
+    strategy = M11OpportunityStrategy(symbols=("AAPL", "MSFT"))
+    base = _context(aapl_growth=Decimal("0.002"), msft_growth=Decimal("0.001"))
+    current = base.reference_prices["AAPL"]
+    context = _with_position(
+        base,
+        symbol="AAPL",
+        average_price=current / Decimal("1.02"),
+    )
+
+    target = strategy.generate_target(context)
+
+    assert target.weights == {}
+    assert target.cash_weight == Decimal("1")
+    assert target.evidence["selection"] == "TAKE_PROFIT_EXIT"
+
+
+def test_entry_cutoff_prevents_late_new_position() -> None:
+    strategy = M11OpportunityStrategy(symbols=("AAPL", "MSFT"))
+    base = _context(aapl_growth=Decimal("0.004"), msft_growth=Decimal("0.002"))
+    context = base.model_copy(update={"as_of": datetime(2026, 9, 14, 19, 20, tzinfo=UTC)})
+
+    target = strategy.generate_target(context)
+
+    assert target.weights == {}
+    assert target.cash_weight == Decimal("1")
+    assert target.evidence["selection"] == "CASH_ENTRY_CUTOFF"
+
+
+def test_end_of_day_window_forces_flat_portfolio() -> None:
+    strategy = M11OpportunityStrategy(symbols=("AAPL", "MSFT"))
+    base = _context(aapl_growth=Decimal("0.004"), msft_growth=Decimal("0.002"))
+    positioned = _with_position(
+        base,
+        symbol="AAPL",
+        average_price=base.reference_prices["AAPL"],
+    )
+    context = positioned.model_copy(
+        update={"as_of": datetime(2026, 9, 14, 19, 50, tzinfo=UTC)}
+    )
+
+    target = strategy.generate_target(context)
+
+    assert target.weights == {}
+    assert target.cash_weight == Decimal("1")
+    assert target.evidence["selection"] == "FLATTEN_END_OF_DAY"
+
+
+def test_entry_cutoff_holds_current_position_without_adding() -> None:
+    strategy = M11OpportunityStrategy(symbols=("AAPL", "MSFT"))
+    base = _context(aapl_growth=Decimal("0.004"), msft_growth=Decimal("0.002"))
+    positioned = _with_position(
+        base,
+        symbol="AAPL",
+        average_price=base.reference_prices["AAPL"],
+        quantity=Decimal("0.1"),
+    )
+    context = positioned.model_copy(
+        update={"as_of": datetime(2026, 9, 14, 19, 20, tzinfo=UTC)}
+    )
+
+    target = strategy.generate_target(context)
+
+    expected_weight = (
+        Decimal("0.1") * context.reference_prices["AAPL"] / context.portfolio.nav
+    )
+    assert target.weights == {"AAPL": expected_weight}
+    assert target.cash_weight == Decimal("1") - expected_weight
+    assert target.evidence["selection"] == "HOLD_INCUMBENT_ENTRY_CUTOFF"

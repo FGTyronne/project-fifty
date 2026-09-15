@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 from project_fifty.strategies.contracts import MarketBar, StrategyContext, TargetPortfolio
 
 M11_STRATEGY_ID = "multi-asset-opportunity-scanner"
-M11_STRATEGY_VERSION = "0.2.0-research"
+M11_STRATEGY_VERSION = "0.3.0-research"
 M11_UNIVERSE_VERSION = "2026-09-14-v1"
 M11_BENCHMARK = "SPY"
 
@@ -88,15 +90,17 @@ M11_RESEARCH_SYMBOLS: tuple[str, ...] = (
 _ZERO = Decimal("0")
 _ONE = Decimal("1")
 _TEN_THOUSAND = Decimal("10000")
+_NEW_YORK = ZoneInfo("America/New_York")
 
 
 @dataclass(frozen=True)
 class M11ScannerConfig:
-    """Predeclared M11 adaptive research parameters.
+    """Predeclared M11 adaptive intraday research parameters.
 
-    M11 is intentionally allowed to choose among multiple signal families rather than being tied to
-    one SPY/cash rule. The strategy remains deterministic and research-only until historical and
-    paper gates are passed.
+    The strategy may choose among multiple signal families, rotate between qualifying assets and
+    exit positions during the session. It is explicitly day-trading research: new entries stop late
+    in the session and all exposure is targeted back to cash before the regular close. These values
+    are research parameters, not profitability claims or live-money authority.
     """
 
     short_momentum_bars: int = 3
@@ -110,6 +114,10 @@ class M11ScannerConfig:
     rotation_buffer_bps: Decimal = Decimal("12")
     minimum_score: Decimal = Decimal("0.75")
     volatility_floor: Decimal = Decimal("0.0005")
+    stop_loss_bps: Decimal = Decimal("75")
+    take_profit_bps: Decimal = Decimal("125")
+    entry_cutoff_minutes_before_close: int = 45
+    flatten_minutes_before_close: int = 15
 
     def __post_init__(self) -> None:
         windows = (
@@ -118,9 +126,13 @@ class M11ScannerConfig:
             self.breakout_bars,
             self.volatility_bars,
             self.volume_bars,
+            self.entry_cutoff_minutes_before_close,
+            self.flatten_minutes_before_close,
         )
         if min(windows) <= 0:
-            raise ValueError("M11 lookback windows must be positive")
+            raise ValueError("M11 lookback and session timing values must be positive")
+        if self.flatten_minutes_before_close > self.entry_cutoff_minutes_before_close:
+            raise ValueError("flatten window must not begin before the entry cutoff")
         decimals = (
             self.minimum_average_dollar_volume,
             self.modeled_round_trip_friction_bps,
@@ -128,11 +140,15 @@ class M11ScannerConfig:
             self.rotation_buffer_bps,
             self.minimum_score,
             self.volatility_floor,
+            self.stop_loss_bps,
+            self.take_profit_bps,
         )
         if any(not value.is_finite() or value < 0 for value in decimals):
             raise ValueError("M11 numeric gates must be finite and non-negative")
         if self.volatility_floor == 0:
             raise ValueError("M11 volatility floor must be positive")
+        if self.stop_loss_bps == 0 or self.take_profit_bps == 0:
+            raise ValueError("M11 stop loss and take profit must be positive")
 
 
 @dataclass(frozen=True)
@@ -166,12 +182,12 @@ class OpportunityCandidate:
 
 
 class M11OpportunityStrategy:
-    """Research-only adaptive cross-sectional opportunity scanner.
+    """Adaptive, day-trading-oriented cross-sectional opportunity scanner.
 
     The engine scans many permitted assets and lets the strongest qualifying signal family win. It
-    can rotate between momentum, breakout, pullback mean-reversion and defensive relative-strength
-    opportunities, or return cash. It has no broker credentials and cannot bypass Project Fifty's
-    proposal, risk and execution boundary.
+    can enter, hold, rotate, stop out, take profit or return to cash. It explicitly targets no
+    overnight exposure. It has no broker credentials and cannot bypass Project Fifty's proposal,
+    risk and execution boundary.
     """
 
     strategy_id = M11_STRATEGY_ID
@@ -216,29 +232,50 @@ class M11OpportunityStrategy:
         return tuple(sorted(candidates, key=lambda item: (-item.score, item.symbol)))
 
     def generate_target(self, context: StrategyContext) -> TargetPortfolio:
+        common = self._common_evidence()
+        held_symbols = self._held_symbols(context)
+
+        if self._flatten_window(context.as_of):
+            return self._cash_target(context, common, "FLATTEN_END_OF_DAY")
+
+        if len(held_symbols) > 1:
+            return self._cash_target(context, common, "FLATTEN_UNSUPPORTED_MULTI_POSITION")
+
+        if held_symbols:
+            risk_exit = self._risk_exit_reason(context, held_symbols[0])
+            if risk_exit is not None:
+                return self._cash_target(context, common, risk_exit)
+
         ranked = self.scan(context)
-        common = {
-            "universe_version": M11_UNIVERSE_VERSION,
-            "candidate_count": str(len(ranked)),
-            "modeled_round_trip_friction_bps": str(
-                self.config.modeled_round_trip_friction_bps
-            ),
-            "minimum_edge_buffer_bps": str(self.config.minimum_edge_buffer_bps),
-            "rotation_buffer_bps": str(self.config.rotation_buffer_bps),
-            "research_only": "true",
-        }
-        if not ranked:
-            return TargetPortfolio(
-                as_of=context.as_of,
-                currency=context.currency,
-                weights={},
-                cash_weight=_ONE,
-                strategy_id=self.strategy_id,
-                strategy_version=self.strategy_version,
-                confidence=Decimal("0.50"),
-                market_state_hash=context.market_state_hash,
-                evidence={**common, "selection": "CASH_NO_ECONOMIC_OPPORTUNITY"},
+        common["candidate_count"] = str(len(ranked))
+
+        if self._entry_cutoff_window(context.as_of):
+            if not held_symbols:
+                return self._cash_target(context, common, "CASH_ENTRY_CUTOFF")
+            incumbent_symbol = held_symbols[0]
+            incumbent = next(
+                (candidate for candidate in ranked if candidate.symbol == incumbent_symbol),
+                None,
             )
+            if incumbent is None:
+                return self._cash_target(
+                    context,
+                    common,
+                    "EXIT_SIGNAL_INVALIDATED_ENTRY_CUTOFF",
+                )
+            return self._hold_current_position_target(
+                context,
+                common,
+                incumbent_symbol,
+                "HOLD_INCUMBENT_ENTRY_CUTOFF",
+                incumbent,
+            )
+
+        if not ranked:
+            selection = (
+                "EXIT_NO_ECONOMIC_OPPORTUNITY" if held_symbols else "CASH_NO_ECONOMIC_OPPORTUNITY"
+            )
+            return self._cash_target(context, common, selection)
 
         selected, selection = self._select_with_incumbency(ranked, context)
         return TargetPortfolio(
@@ -253,19 +290,88 @@ class M11OpportunityStrategy:
             evidence={**common, "selection": selection, **selected.evidence()},
         )
 
+    def _common_evidence(self) -> dict[str, str]:
+        return {
+            "universe_version": M11_UNIVERSE_VERSION,
+            "candidate_count": "0",
+            "modeled_round_trip_friction_bps": str(
+                self.config.modeled_round_trip_friction_bps
+            ),
+            "minimum_edge_buffer_bps": str(self.config.minimum_edge_buffer_bps),
+            "rotation_buffer_bps": str(self.config.rotation_buffer_bps),
+            "stop_loss_bps": str(self.config.stop_loss_bps),
+            "take_profit_bps": str(self.config.take_profit_bps),
+            "entry_cutoff_minutes_before_close": str(
+                self.config.entry_cutoff_minutes_before_close
+            ),
+            "flatten_minutes_before_close": str(self.config.flatten_minutes_before_close),
+            "day_trade_only": "true",
+            "research_only": "true",
+        }
+
+    def _cash_target(
+        self,
+        context: StrategyContext,
+        common: dict[str, str],
+        selection: str,
+    ) -> TargetPortfolio:
+        return TargetPortfolio(
+            as_of=context.as_of,
+            currency=context.currency,
+            weights={},
+            cash_weight=_ONE,
+            strategy_id=self.strategy_id,
+            strategy_version=self.strategy_version,
+            confidence=Decimal("0.50"),
+            market_state_hash=context.market_state_hash,
+            evidence={**common, "selection": selection},
+        )
+
+    def _hold_current_position_target(
+        self,
+        context: StrategyContext,
+        common: dict[str, str],
+        symbol: str,
+        selection: str,
+        candidate: OpportunityCandidate,
+    ) -> TargetPortfolio:
+        position = context.portfolio.positions[symbol]
+        price = context.reference_prices[symbol]
+        if context.portfolio.nav <= 0:
+            return self._cash_target(context, common, "FLATTEN_INVALID_NAV")
+        current_weight = (position.quantity * price) / context.portfolio.nav
+        current_weight = max(_ZERO, min(_ONE, current_weight))
+        return TargetPortfolio(
+            as_of=context.as_of,
+            currency=context.currency,
+            weights={symbol: current_weight},
+            cash_weight=_ONE - current_weight,
+            strategy_id=self.strategy_id,
+            strategy_version=self.strategy_version,
+            confidence=Decimal("0.50"),
+            market_state_hash=context.market_state_hash,
+            evidence={**common, "selection": selection, **candidate.evidence()},
+        )
+
+    def _risk_exit_reason(self, context: StrategyContext, symbol: str) -> str | None:
+        position = context.portfolio.positions[symbol]
+        current_price = context.reference_prices.get(symbol)
+        if current_price is None or position.average_price <= 0:
+            return "FLATTEN_MISSING_POSITION_MARK"
+        pnl_bps = (current_price / position.average_price - _ONE) * _TEN_THOUSAND
+        if pnl_bps <= -self.config.stop_loss_bps:
+            return "STOP_LOSS_EXIT"
+        if pnl_bps >= self.config.take_profit_bps:
+            return "TAKE_PROFIT_EXIT"
+        return None
+
     def _select_with_incumbency(
         self,
         ranked: tuple[OpportunityCandidate, ...],
         context: StrategyContext,
     ) -> tuple[OpportunityCandidate, str]:
         best = ranked[0]
-        held_symbols = tuple(
-            sorted(
-                symbol
-                for symbol, position in context.portfolio.positions.items()
-                if position.quantity > 0
-            )
-        )
+        held_symbols = self._held_symbols(context)
         if len(held_symbols) != 1:
             return best, "ENTER_BEST_LONG"
 
@@ -274,13 +380,43 @@ class M11OpportunityStrategy:
             (candidate for candidate in ranked if candidate.symbol == incumbent_symbol),
             None,
         )
-        if incumbent is None or incumbent.symbol == best.symbol:
-            return best, "HOLD_BEST_LONG" if incumbent is not None else "ENTER_BEST_LONG"
+        if incumbent is None:
+            return best, "ROTATE_FROM_INVALIDATED_LONG"
+        if incumbent.symbol == best.symbol:
+            return best, "HOLD_BEST_LONG"
 
         challenger_threshold = incumbent.estimated_net_edge_bps + self.config.rotation_buffer_bps
         if best.estimated_net_edge_bps < challenger_threshold:
             return incumbent, "HOLD_INCUMBENT_ROTATION_BUFFER"
         return best, "ROTATE_TO_BETTER_LONG"
+
+    @staticmethod
+    def _held_symbols(context: StrategyContext) -> tuple[str, ...]:
+        return tuple(
+            sorted(
+                symbol
+                for symbol, position in context.portfolio.positions.items()
+                if position.quantity > 0
+            )
+        )
+
+    def _entry_cutoff_window(self, as_of: datetime) -> bool:
+        return (
+            self._minutes_to_regular_close(as_of)
+            <= self.config.entry_cutoff_minutes_before_close
+        )
+
+    def _flatten_window(self, as_of: datetime) -> bool:
+        return self._minutes_to_regular_close(as_of) <= self.config.flatten_minutes_before_close
+
+    @staticmethod
+    def _minutes_to_regular_close(as_of: datetime) -> int:
+        if as_of.tzinfo is None:
+            raise ValueError("M11 requires timezone-aware timestamps")
+        local = as_of.astimezone(_NEW_YORK)
+        close = local.replace(hour=16, minute=0, second=0, microsecond=0)
+        remaining = int((close - local).total_seconds() // 60)
+        return max(0, remaining)
 
     def _candidate(
         self,
