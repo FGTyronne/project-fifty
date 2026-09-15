@@ -33,6 +33,7 @@ OWNER_LIFETIME_GBP = Decimal("50.00")
 HISTORY_START = datetime(2020, 1, 2, tzinfo=UTC)
 SYMBOL = "SPY"
 MAX_M10_ORDER_NOTIONAL = Decimal("250")
+RETIRE_ENV = "PROJECT_FIFTY_M10_RETIRE_TO_CASH"
 
 
 class _InceptionBootstrapStrategy:
@@ -48,13 +49,36 @@ class _InceptionBootstrapStrategy:
         return self._delegate.generate_inception_target(context)
 
 
-class _InceptionLedgerView:
-    """Expose durable state while ignoring prior cycle markers for one bootstrap evaluation.
+class _RetireToCashStrategy:
+    """Retire the M10 swing control without bypassing the normal execution boundary."""
 
-    M10 already recorded a normal NOT_SCHEDULED cycle before inception semantics were introduced.
-    The bootstrap must therefore be allowed to evaluate that same completed daily bar exactly once.
-    All execution reports and every other durable event remain visible, and all new events are
-    appended to the real ledger.
+    strategy_id = "m10-retire-to-cash"
+    strategy_version = "1.0.0"
+
+    def generate_target(self, context: StrategyContext) -> TargetPortfolio:
+        return TargetPortfolio(
+            as_of=context.as_of,
+            currency=context.currency,
+            weights={},
+            cash_weight=Decimal("1"),
+            strategy_id=self.strategy_id,
+            strategy_version=self.strategy_version,
+            confidence=Decimal("1"),
+            market_state_hash=context.market_state_hash,
+            evidence={
+                "selection": "RETIRE_M10_SWING_TO_CASH",
+                "reason": "M10 does not satisfy Project Fifty day-trading mandate",
+            },
+        )
+
+
+class _InceptionLedgerView:
+    """Expose durable state while ignoring prior strategy-cycle markers.
+
+    This view was introduced for the inception bootstrap. It is also appropriate for retirement:
+    retirement must be allowed to retry a risk-reducing cash target even when the latest market bar
+    has already been evaluated by the old swing strategy. Execution reports and every other durable
+    event remain visible and all new events are appended to the real ledger.
     """
 
     def __init__(self, delegate: LocalAppendOnlyLedger) -> None:
@@ -69,6 +93,10 @@ class _InceptionLedgerView:
             for event in self._delegate.all_events()
             if event.event_type != "strategy_cycle_completed"
         ]
+
+
+def _env_flag(name: str) -> bool:
+    return os.getenv(name, "false").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _validated_settings() -> Settings:
@@ -129,6 +157,7 @@ def _write_summary(
     pending_count: int,
     submissions_this_run: int,
     result: SessionCycleResult | None,
+    retire_to_cash: bool,
 ) -> None:
     payload: dict[str, object] = {
         "generated_at_utc": generated_at.isoformat(),
@@ -138,8 +167,17 @@ def _write_summary(
         "paper_submissions_this_run": submissions_this_run,
         "internal_starting_authority_usd": str(INTERNAL_STARTING_CASH),
         "broker_buying_power_used_for_authority": False,
-        "strategy_id": SingleMarketTrendStrategy.strategy_id,
-        "strategy_version": SingleMarketTrendStrategy.strategy_version,
+        "strategy_id": (
+            _RetireToCashStrategy.strategy_id
+            if retire_to_cash
+            else SingleMarketTrendStrategy.strategy_id
+        ),
+        "strategy_version": (
+            _RetireToCashStrategy.strategy_version
+            if retire_to_cash
+            else SingleMarketTrendStrategy.strategy_version
+        ),
+        "m10_retire_to_cash": retire_to_cash,
     }
     if result is not None:
         payload["cycle"] = {
@@ -162,6 +200,7 @@ def _write_summary(
 def main() -> None:
     now = datetime.now(UTC)
     settings = _validated_settings()
+    retire_to_cash = _env_flag(RETIRE_ENV)
     state_dir = Path(os.getenv("PROJECT_FIFTY_STATE_DIR", "state"))
     ledger_path = state_dir / "m10-ledger.jsonl"
     summary_path = state_dir / "m10-runtime-summary.json"
@@ -171,15 +210,26 @@ def main() -> None:
         kill_switch_active=settings.kill_switch,
     )
     submissions_before = _count_submissions(ledger)
+    runtime_strategy_id = (
+        _RetireToCashStrategy.strategy_id
+        if retire_to_cash
+        else SingleMarketTrendStrategy.strategy_id
+    )
+    runtime_strategy_version = (
+        _RetireToCashStrategy.strategy_version
+        if retire_to_cash
+        else SingleMarketTrendStrategy.strategy_version
+    )
 
     ledger.append(
         "paper_runtime_started",
         {
             "as_of": now.isoformat(),
-            "strategy_id": SingleMarketTrendStrategy.strategy_id,
-            "strategy_version": SingleMarketTrendStrategy.strategy_version,
+            "strategy_id": runtime_strategy_id,
+            "strategy_version": runtime_strategy_version,
             "control_mode": control.mode.value,
             "kill_switch_active": control.kill_switch_active,
+            "m10_retire_to_cash": retire_to_cash,
         },
     )
 
@@ -237,6 +287,7 @@ def main() -> None:
                 pending_count=len(still_pending),
                 submissions_this_run=_count_submissions(ledger) - submissions_before,
                 result=None,
+                retire_to_cash=retire_to_cash,
             )
             raise RuntimeError("broker/internal divergence forced M10 SAFE mode")
 
@@ -249,6 +300,7 @@ def main() -> None:
                 pending_count=len(still_pending),
                 submissions_this_run=_count_submissions(ledger) - submissions_before,
                 result=None,
+                retire_to_cash=retire_to_cash,
             )
             raise RuntimeError("Project Fifty is DEAD and cannot resume this experiment")
 
@@ -269,27 +321,45 @@ def main() -> None:
                 pending_count=len(still_pending),
                 submissions_this_run=_count_submissions(ledger) - submissions_before,
                 result=None,
+                retire_to_cash=retire_to_cash,
             )
             print("Project Fifty M10: pending broker order; no new strategy action")
             return
 
-        base_strategy = SingleMarketTrendStrategy()
-        bootstrap_required = _inception_bootstrap_required(ledger)
-        strategy = (
-            _InceptionBootstrapStrategy(base_strategy) if bootstrap_required else base_strategy
-        )
-        runner_ledger = _InceptionLedgerView(ledger) if bootstrap_required else ledger
-        if bootstrap_required:
+        if retire_to_cash:
+            strategy = _RetireToCashStrategy()
+            bootstrap_required = False
+            runner_ledger = _InceptionLedgerView(ledger)
+            rebalance_policy = None
             ledger.append(
-                "m10_inception_bootstrap_started",
+                "m10_retirement_mode",
                 {
                     "as_of": now.isoformat(),
-                    "strategy_id": base_strategy.strategy_id,
-                    "strategy_version": base_strategy.strategy_version,
-                    "reason": "establish_initial_economic_state",
-                    "cadence_override": "inception_only",
+                    "selection": "RETIRE_M10_SWING_TO_CASH",
+                    "reason": "M10 failed the intended day-trading product mandate",
                 },
             )
+        else:
+            base_strategy = SingleMarketTrendStrategy()
+            bootstrap_required = _inception_bootstrap_required(ledger)
+            strategy = (
+                _InceptionBootstrapStrategy(base_strategy)
+                if bootstrap_required
+                else base_strategy
+            )
+            runner_ledger = _InceptionLedgerView(ledger) if bootstrap_required else ledger
+            rebalance_policy = m9_rebalance_policy()
+            if bootstrap_required:
+                ledger.append(
+                    "m10_inception_bootstrap_started",
+                    {
+                        "as_of": now.isoformat(),
+                        "strategy_id": base_strategy.strategy_id,
+                        "strategy_version": base_strategy.strategy_version,
+                        "reason": "establish_initial_economic_state",
+                        "cadence_override": "inception_only",
+                    },
+                )
 
         runner = AutonomousSessionRunner(
             settings=settings,
@@ -300,7 +370,7 @@ def main() -> None:
             proposal_builder=ProposalBuilder(
                 min_order_notional=Decimal("5.00"),
                 estimated_slippage_rate=Decimal("0.001"),
-                rebalance_policy=m9_rebalance_policy(),
+                rebalance_policy=rebalance_policy,
             ),
             proposal_handler=kernel,
             ledger=runner_ledger,
@@ -352,6 +422,7 @@ def main() -> None:
             "submissions_this_run": submissions_after - submissions_before,
             "skipped_reason": result.skipped_reason,
             "control_mode": control.mode.value,
+            "m10_retire_to_cash": retire_to_cash,
         },
     )
     _write_summary(
@@ -362,10 +433,12 @@ def main() -> None:
         pending_count=0,
         submissions_this_run=submissions_after - submissions_before,
         result=result,
+        retire_to_cash=retire_to_cash,
     )
 
     print("Project Fifty M10 autonomous paper cycle completed")
     print(f"control_mode={control.mode.value}")
+    print(f"m10_retire_to_cash={retire_to_cash}")
     print(f"market_open={result.market_open}")
     print(f"decision_bar_time={result.decision_bar_time}")
     print(f"proposal_count={result.proposal_count}")
