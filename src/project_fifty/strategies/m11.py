@@ -401,7 +401,10 @@ class M11OpportunityStrategy:
         )
 
     def _entry_cutoff_window(self, as_of: datetime) -> bool:
-        return self._minutes_to_regular_close(as_of) <= self.config.entry_cutoff_minutes_before_close
+        return (
+            self._minutes_to_regular_close(as_of)
+            <= self.config.entry_cutoff_minutes_before_close
+        )
 
     def _flatten_window(self, as_of: datetime) -> bool:
         return self._minutes_to_regular_close(as_of) <= self.config.flatten_minutes_before_close
