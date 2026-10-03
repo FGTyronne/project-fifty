@@ -1,21 +1,12 @@
-name: alpaca-m10-paper
+name: alpaca-m10-retired
 
+# M10 is retained only for manual forensic/recovery use. Its autonomous schedule is disabled;
+# M11 is the sole scheduled Project Fifty paper trader.
 on:
   workflow_dispatch:
-  schedule:
-    # GitHub Actions cannot schedule more frequently than every 5 minutes.
-    # Start one 15-minute watcher block and poll internally every 3 minutes.
-    # Alpaca's market clock remains the authoritative gate, so holidays and
-    # daylight-saving transitions fail closed.
-    - cron: '*/15 13-21 * * 1-5'
-  push:
-    branches:
-      - main
-    paths:
-      - .github/m10-paper.trigger
 
 concurrency:
-  group: m10-paper-runtime
+  group: project-fifty-paper-runtime
   cancel-in-progress: false
 
 permissions:
