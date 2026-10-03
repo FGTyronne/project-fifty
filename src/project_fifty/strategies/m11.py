@@ -8,12 +8,12 @@ from zoneinfo import ZoneInfo
 from project_fifty.strategies.contracts import MarketBar, StrategyContext, TargetPortfolio
 
 M11_STRATEGY_ID = "multi-asset-opportunity-scanner"
-M11_STRATEGY_VERSION = "0.3.0-research"
+M11_STRATEGY_VERSION = "0.4.0-paper"
 M11_UNIVERSE_VERSION = "2026-09-14-v1"
 M11_BENCHMARK = "SPY"
 
-# Research-only, deterministic initial universe. Every name must still pass broker metadata checks
-# before any future paper deployment. Leveraged/inverse ETFs, derivatives and shorting are excluded.
+# Deterministic paper-trading universe. Leveraged/inverse ETFs, derivatives and shorting remain
+# excluded. The broker adapter independently validates the selected instrument before execution.
 M11_RESEARCH_SYMBOLS: tuple[str, ...] = (
     "AAPL",
     "ABBV",
@@ -95,12 +95,12 @@ _NEW_YORK = ZoneInfo("America/New_York")
 
 @dataclass(frozen=True)
 class M11ScannerConfig:
-    """Predeclared M11 adaptive intraday research parameters.
+    """Predeclared M11 adaptive intraday paper-trading parameters.
 
     The strategy may choose among multiple signal families, rotate between qualifying assets and
-    exit positions during the session. It is explicitly day-trading research: new entries stop late
-    in the session and all exposure is targeted back to cash before the regular close. These values
-    are research parameters, not profitability claims or live-money authority.
+    exit positions during the session. New entries stop late in the session and all exposure is
+    targeted back to cash before the regular close. These values authorize paper execution only,
+    not live-money trading and not any profitability claim.
     """
 
     short_momentum_bars: int = 3
@@ -306,7 +306,8 @@ class M11OpportunityStrategy:
             ),
             "flatten_minutes_before_close": str(self.config.flatten_minutes_before_close),
             "day_trade_only": "true",
-            "research_only": "true",
+            "paper_execution": "true",
+            "live_money_authorized": "false",
         }
 
     def _cash_target(
