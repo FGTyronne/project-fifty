@@ -122,7 +122,8 @@ def test_scanner_ranks_stronger_candidate_first_deterministically() -> None:
     assert target.weights == {"AAPL": Decimal("1")}
     assert target.cash_weight == Decimal("0")
     assert target.evidence["selection"] == "ENTER_BEST_LONG"
-    assert target.evidence["paper_execution"] == "true"\n    assert target.evidence["live_money_authorized"] == "false"
+    assert target.evidence["paper_execution"] == "true"
+    assert target.evidence["live_money_authorized"] == "false"
     assert target.evidence["day_trade_only"] == "true"
     assert target.evidence["signal_family"] in {"momentum", "breakout"}
 
