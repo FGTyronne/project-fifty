@@ -3,10 +3,12 @@ name: alpaca-m11-day-trader
 on:
   workflow_dispatch:
   schedule:
-    # GitHub's scheduler floor is five minutes. One 15-minute job contains five
-    # three-minute autonomous cycles, giving Project Fifty the requested cadence
-    # while keeping a single durable-state handoff between jobs.
-    - cron: '*/15 13-21 * * 1-5'
+    # GitHub's high-frequency scheduler proved unreliable for Project Fifty.
+    # Use two off-peak session launches instead; each job stays alive and
+    # evaluates the market internally every three minutes. The two shifts
+    # cover the full US regular session across US daylight-saving changes.
+    - cron: '23 13 * * 1-5'
+    - cron: '17 17 * * 1-5'
   push:
     branches:
       - main
@@ -24,7 +26,7 @@ permissions:
 jobs:
   autonomous-day-trader:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 260
     env:
       GH_TOKEN: ${{ github.token }}
       ALPACA_PAPER_API_KEY: ${{ secrets.ALPACA_PAPER_API_KEY }}
@@ -94,14 +96,48 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Run three-minute autonomous day-trading watch
+      - name: Run persistent three-minute autonomous day-trading shift
         shell: bash
         run: |
           set -euo pipefail
-          for cycle in 1 2 3 4 5; do
-            echo "M11 autonomous day-trading cycle ${cycle}/5"
+          seen_open=0
+
+          for cycle in $(seq 1 80); do
+            echo "M11 autonomous day-trading cycle ${cycle}/80"
             python scripts/alpaca_m11_paper_runtime.py
-            if [[ "${cycle}" -lt 5 ]]; then
+
+            market_open="$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('state/m11-runtime-summary.json').read_text())
+          cycle = payload.get('cycle') or {}
+          print('true' if cycle.get('market_open') else 'false')
+          PY
+            )"
+
+            if [[ "${market_open}" == "true" ]]; then
+              seen_open=1
+            fi
+
+            # Once a regular session has been observed open, the first closed
+            # clock reading ends the shift. Alpaca's clock is authoritative.
+            if [[ "${seen_open}" == "1" && "${market_open}" == "false" ]]; then
+              echo "Regular market closed after active session; ending M11 shift."
+              break
+            fi
+
+            # On early-close days a later backup shift may begin after the
+            # session has already ended. Avoid waiting for the full timeout.
+            utc_hour="$(date -u +%H)"
+            utc_minute="$(date -u +%M)"
+            utc_minutes=$((10#${utc_hour} * 60 + 10#${utc_minute}))
+            if [[ "${seen_open}" == "0" && "${market_open}" == "false" && "${utc_minutes}" -ge 1080 ]]; then
+              echo "Market remains closed after 18:00 UTC; ending backup shift."
+              break
+            fi
+
+            if [[ "${cycle}" -lt 80 ]]; then
               sleep 180
             fi
           done
